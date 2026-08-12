@@ -1,0 +1,39 @@
+# ===== 站点基本信息 =====
+site:
+  name: 示例水厂
+  code: plant-demo
+
+# ===== 机器清单（多机场景）=====
+nodes:
+  - name: db-node
+    ip: 10.10.104.23
+    ssh: { user: root, port: 22 }
+    roles: [database]
+  - name: app-node
+    ip: 10.10.104.22
+    ssh: { user: root, port: 22 }
+    roles: [middleware, platform, smartwater, monitor]
+
+# ===== 启用的业务模块（映射 compose profiles）=====
+profiles: [platform, smartwater, monitor]
+
+# ===== 中间件连接参数 =====
+middleware:
+  nacos: { host: 10.10.104.22, port: 8848, namespace: plant-demo,
+           username: nacos, password: "ChangeMe!" }
+  mysql: { host: 10.10.104.23, port: 3306, user: wpg, password: "ChangeMe!" }
+  pgsql: { host: 10.10.104.23, port: 5433, user: wpg, password: "ChangeMe!", database: waterwork }
+  redis: { host: 10.10.104.23, port: 6377, password: "ChangeMe!" }
+  kafka: { host: 10.10.104.22, port: 9092 }
+
+# ===== 站点级覆盖 =====
+overrides:
+  waterwork-center: { xmx: 2048M }
+
+# ===== 路径规划 =====
+paths:
+  workspace: /workspace/waterwork
+  logs: /workspace/waterwork-logs
+  nginxHtml: /workspace/nginx/html
+
+fetchBaseUrl: "https://packages.example.com/packages"

@@ -1,0 +1,65 @@
+kind: release
+version: 4.0.2
+requiresBase: ">=1.0.0"
+arch: [amd64]
+minCpu: 4
+minMemGb: 16
+minDiskGb: 100
+services:
+  - name: mysql
+    image: mysql:5.7.44
+    layer: 1
+    port: 3306
+    health: { type: tcp, timeoutSec: 120 }
+  - name: redis
+    image: redis:6.0
+    layer: 1
+    port: 6377
+    health: { type: tcp }
+  - name: kafka
+    image: bitnami/kafka:3.4
+    layer: 1
+    port: 9092
+    health: { type: tcp }
+  - name: nacos
+    image: nacos/nacos-server:v2.2.3
+    layer: 1
+    port: 8848
+    health: { type: http, path: /nacos/, timeoutSec: 180 }
+  - name: waterwork-gateway
+    image: waterwork-gateway:4.0.2
+    profile: platform
+    layer: 2
+    port: 18090
+    health: { type: http, path: /actuator/health, timeoutSec: 120 }
+  - name: waterwork-center
+    image: waterwork-center:4.0.2
+    profile: platform
+    layer: 3
+    port: 8401
+    health: { type: http, path: /actuator/health, timeoutSec: 120 }
+  - name: waterwork-device
+    image: waterwork-device:4.0.2
+    profile: smartwater
+    layer: 3
+    port: 8402
+    health: { type: http, path: /actuator/health, timeoutSec: 120 }
+  - name: nginx
+    image: nginx:1.24
+    layer: 4
+    port: 8877
+    health: { type: http, path: /, timeoutSec: 60 }
+  - name: prometheus
+    image: prom/prometheus:v2.45.0
+    profile: monitor
+    layer: 4
+    port: 29090
+    health: { type: http, path: /-/healthy }
+frontend:
+  - name: web
+    archive: frontend/dist-web.tar.gz
+    nginxHtmlSubdir: web
+sql:
+  - dir: sql/smartwater
+    database: smartwater
+    driver: mysql

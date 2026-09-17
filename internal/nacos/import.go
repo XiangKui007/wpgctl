@@ -2,6 +2,7 @@
 package nacos
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,9 +18,9 @@ import (
 
 // Options 导入选项。
 type Options struct {
-	Site       *config.SiteConfig
-	ConfigDir  string // 已渲染的 nacos 配置目录
-	BackupDir  string
+	Site      *config.SiteConfig
+	ConfigDir string // 已渲染的 nacos 配置目录
+	BackupDir string
 }
 
 // Result 导入结果。
@@ -42,14 +43,26 @@ func Run(opts Options) (*Result, error) {
 	}
 	_ = util.EnsureDir(opts.BackupDir)
 
-	cli := &Client{
-		Base:     fmt.Sprintf("http://%s:%d", opts.Site.Middleware.Nacos.Host, opts.Site.Middleware.Nacos.Port),
-		Username: opts.Site.Middleware.Nacos.Username,
-		Password: opts.Site.Middleware.Nacos.Password,
-		HTTP:     &http.Client{Timeout: 30 * time.Second},
+	n := opts.Site.Middleware.Nacos
+	if strings.TrimSpace(n.Username) == "" {
+		return nil, fmt.Errorf("middleware.nacos.username 不能为空")
+	}
+	if n.Password == "" {
+		return nil, fmt.Errorf("middleware.nacos.password 不能为空（请检查 site.yaml 是否已保存密码）")
 	}
 
-	ns := opts.Site.Middleware.Nacos.Namespace
+	cli := &Client{
+		Base:     fmt.Sprintf("http://%s:%d", n.Host, n.Port),
+		Username: n.Username,
+		Password: n.Password,
+		HTTP:     &http.Client{Timeout: 30 * time.Second},
+	}
+	if err := cli.login(); err != nil {
+		return nil, fmt.Errorf("Nacos 登录失败 (%s@%s): %w", cli.Username, cli.Base, err)
+	}
+	util.Infof("Nacos 已登录: %s namespace=%s", cli.Base, n.Namespace)
+
+	ns := n.Namespace
 	if err := cli.EnsureNamespace(ns, opts.Site.Site.Code); err != nil {
 		return nil, err
 	}
@@ -98,22 +111,64 @@ func Run(opts Options) (*Result, error) {
 
 // Client Nacos OpenAPI 客户端。
 type Client struct {
-	Base     string
-	Username string
-	Password string
-	HTTP     *http.Client
+	Base        string
+	Username    string
+	Password    string
+	HTTP        *http.Client
+	accessToken string
+}
+
+type loginResp struct {
+	AccessToken string `json:"accessToken"`
+	TokenTTL    int    `json:"tokenTtl"`
+}
+
+func (c *Client) login() error {
+	form := url.Values{}
+	form.Set("username", c.Username)
+	form.Set("password", c.Password)
+	resp, err := c.HTTP.PostForm(c.Base+"/nacos/v1/auth/login", form)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	var lr loginResp
+	if err := json.Unmarshal(body, &lr); err != nil {
+		return fmt.Errorf("解析登录响应失败: %w (body=%s)", err, strings.TrimSpace(string(body)))
+	}
+	if lr.AccessToken == "" {
+		return fmt.Errorf("未返回 accessToken (body=%s)", strings.TrimSpace(string(body)))
+	}
+	c.accessToken = lr.AccessToken
+	return nil
+}
+
+func (c *Client) withToken(q url.Values) {
+	if c.accessToken != "" {
+		q.Set("accessToken", c.accessToken)
+	}
 }
 
 // EnsureNamespace 命名空间不存在则创建。
 func (c *Client) EnsureNamespace(namespaceID, namespaceName string) error {
-	// Nacos 2.x：查询 + 创建
-	u := c.Base + "/nacos/v1/console/namespaces"
-	resp, err := c.HTTP.Get(u)
+	u, _ := url.Parse(c.Base + "/nacos/v1/console/namespaces")
+	q := u.Query()
+	c.withToken(q)
+	u.RawQuery = q.Encode()
+
+	resp, err := c.HTTP.Get(u.String())
 	if err != nil {
 		return fmt.Errorf("连接 Nacos 失败: %w", err)
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("查询命名空间失败 HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
 	if strings.Contains(string(body), namespaceID) {
 		return nil
 	}
@@ -121,7 +176,8 @@ func (c *Client) EnsureNamespace(namespaceID, namespaceName string) error {
 	form.Set("customNamespaceId", namespaceID)
 	form.Set("namespaceName", namespaceName)
 	form.Set("namespaceDesc", "created by wpgctl")
-	req, err := http.NewRequest(http.MethodPost, u, strings.NewReader(form.Encode()))
+	c.withToken(form)
+	req, err := http.NewRequest(http.MethodPost, u.String(), strings.NewReader(form.Encode()))
 	if err != nil {
 		return err
 	}
@@ -146,6 +202,7 @@ func (c *Client) GetConfig(namespace, dataID, group string) (string, error) {
 	q.Set("tenant", namespace)
 	q.Set("dataId", dataID)
 	q.Set("group", group)
+	c.withToken(q)
 	u.RawQuery = q.Encode()
 	resp, err := c.HTTP.Get(u.String())
 	if err != nil {
@@ -157,7 +214,7 @@ func (c *Client) GetConfig(namespace, dataID, group string) (string, error) {
 		return "", nil
 	}
 	if resp.StatusCode >= 300 {
-		return "", fmt.Errorf("HTTP %d", resp.StatusCode)
+		return "", fmt.Errorf("HTTP %d body=%s", resp.StatusCode, strings.TrimSpace(string(b)))
 	}
 	return string(b), nil
 }
@@ -170,6 +227,7 @@ func (c *Client) PublishConfig(namespace, dataID, group, content string) error {
 	form.Set("group", group)
 	form.Set("content", content)
 	form.Set("type", guessType(dataID))
+	c.withToken(form)
 	req, err := http.NewRequest(http.MethodPost, c.Base+"/nacos/v1/cs/configs", strings.NewReader(form.Encode()))
 	if err != nil {
 		return err

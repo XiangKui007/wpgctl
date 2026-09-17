@@ -13,6 +13,7 @@ import (
 
 	"github.com/wpg/wpgctl/internal/config"
 	"github.com/wpg/wpgctl/internal/docker"
+	fw "github.com/wpg/wpgctl/internal/firewall"
 	"github.com/wpg/wpgctl/internal/sshx"
 	"github.com/wpg/wpgctl/internal/util"
 )
@@ -21,8 +22,9 @@ import (
 type Options struct {
 	Site        *config.SiteConfig
 	Manifest    *config.Manifest
-	BasePackage string // base 包解压目录，含 docker-install/
-	LocalOnly   bool   // 仅本机，不做 SSH 分发
+	BasePackage   string // base 包解压目录，含 docker-install/
+	DockerPackage string // legacy：含 offline_install_docker.sh 的 docker_package 目录
+	LocalOnly     bool   // 仅本机，不做 SSH 分发
 	SitePath    string // 用于分发到远端的 site.yaml 路径
 	SSHPassword string
 	SSHKeyPath  string
@@ -31,6 +33,7 @@ type Options struct {
 // Result 初始化结果摘要。
 type Result struct {
 	DockerInstalled bool
+	DockerVersion   string `json:"dockerVersion,omitempty"`
 	DirsCreated     []string
 	PortsOpened     []int
 	Skipped         []string
@@ -78,16 +81,13 @@ func distributeInit(opts Options, res *Result) error {
 	if err != nil {
 		return fmt.Errorf("定位本机二进制失败: %w", err)
 	}
-	remoteNodes := make([]config.Node, 0, len(opts.Site.Nodes))
-	for _, n := range opts.Site.Nodes {
-		// 跳过本机 IP 粗判：调用方也可传 LocalOnly
-		remoteNodes = append(remoteNodes, n)
+	remoteNodes := remoteNodes(opts.Site.Nodes)
+	if len(remoteNodes) == 0 {
+		return nil
 	}
 	siteRemote := "/tmp/wpgctl-site.yaml"
+	// 远程节点仅做目录/防火墙等 init；Docker 离线包路径为主控机本地路径，不下发
 	args := []string{"init", "--site", siteRemote, "--local"}
-	if opts.BasePackage != "" {
-		args = append(args, "--base", opts.BasePackage)
-	}
 	// 先上传 site.yaml 到每台，再分发二进制执行
 	results := make([]sshx.NodeResult, 0, len(remoteNodes))
 	for _, n := range remoteNodes {
@@ -129,12 +129,17 @@ func distributeInit(opts Options, res *Result) error {
 func ensureDirs(site *config.SiteConfig, res *Result) error {
 	dirs := []string{
 		site.Paths.Workspace,
-		site.Paths.Logs,
 		site.Paths.NginxHTML,
 		filepath.Join(site.Paths.Workspace, "rendered"),
 		filepath.Join(site.Paths.Workspace, "bak"),
 		util.PackagesDir(),
 		util.StateDir(),
+	}
+	if runtime.GOOS == "linux" {
+		dirs = append(dirs, DockerDataRoot(site))
+	}
+	if strings.TrimSpace(site.Paths.Logs) != "" {
+		dirs = append(dirs, site.Paths.Logs)
 	}
 	for _, d := range dirs {
 		if util.DirExists(d) {
@@ -154,21 +159,42 @@ func ensureDocker(opts Options, res *Result) error {
 	r := dockerx.New()
 	if dockerx.Which("docker") && r.Available() {
 		ver, _ := r.Version()
-		util.Infof("Docker 已就绪: %s，跳过安装", ver)
+		res.DockerVersion = ver
+		if runtime.GOOS == "windows" {
+			util.Infof("Docker Desktop 已就绪: %s，跳过安装", ver)
+		} else {
+			util.Infof("Docker 已就绪: %s，跳过安装", ver)
+		}
 		res.Skipped = append(res.Skipped, "docker-install")
 		return nil
 	}
 
+	if runtime.GOOS == "windows" {
+		return fmt.Errorf("未检测到可用的 Docker Desktop：请安装并启动后再执行 init（Windows 不支持从 base 包离线安装 dockerd）")
+	}
 	if runtime.GOOS != "linux" {
-		msg := fmt.Sprintf("当前 OS=%s，跳过 Docker 离线安装（仅 Linux 现场执行）", runtime.GOOS)
-		util.Warnf(msg)
-		res.Skipped = append(res.Skipped, "docker-install")
-		res.Messages = append(res.Messages, msg)
-		return nil
+		return fmt.Errorf("当前 OS=%s 且 Docker 不可用，请先安装 Docker", runtime.GOOS)
+	}
+
+	dockerDir := opts.DockerPackage
+	if dockerDir == "" && opts.BasePackage != "" {
+		for _, p := range []string{
+			filepath.Join(opts.BasePackage, "docker_package", "docker_package"),
+			filepath.Join(opts.BasePackage, "docker_package"),
+		} {
+			if IsLegacyDockerPackage(p) {
+				dockerDir = p
+				util.Infof("在 base 包内发现 Docker 离线目录: %s", p)
+				break
+			}
+		}
+	}
+	if dockerDir != "" {
+		return installLegacyDocker(dockerDir, opts.Site, res)
 	}
 
 	if opts.BasePackage == "" {
-		return fmt.Errorf("未安装 Docker 且未提供 --base 包路径，无法离线安装")
+		return fmt.Errorf("未安装 Docker：请提供 --docker-package（middleware docker_package 目录）或 --base（含 docker-install/）")
 	}
 
 	arch := runtime.GOARCH
@@ -226,7 +252,12 @@ func ensureDocker(opts Options, res *Result) error {
 	}
 
 	res.DockerInstalled = true
-	util.Successf("Docker 离线安装完成")
+	if ver, err := r.Version(); err == nil && ver != "" {
+		res.DockerVersion = ver
+		util.Successf("Docker 离线安装完成: %s", ver)
+	} else {
+		util.Successf("Docker 离线安装完成")
+	}
 	return nil
 }
 
@@ -240,19 +271,17 @@ func ensureFirewall(opts Options, res *Result) error {
 		return nil
 	}
 	ports := opts.Manifest.Ports(opts.Site.Profiles)
-	fw := detectFirewall()
-	if fw == "none" {
-		util.Warnf("未检测到 firewalld/iptables/ufw，跳过端口放行")
-		res.Skipped = append(res.Skipped, "firewall")
-		return nil
+	fr, err := fw.OpenPorts(ports)
+	if err != nil {
+		util.Warnf("防火墙配置未完成: %v", err)
+		res.Messages = append(res.Messages, "firewall: "+err.Error())
 	}
-	for _, p := range ports {
-		if err := openPort(fw, p); err != nil {
-			util.Warnf("放行端口 %d 失败: %v", p, err)
-			continue
-		}
-		res.PortsOpened = append(res.PortsOpened, p)
-		util.Infof("已放行端口 %d (%s)", p, fw)
+	if fr != nil {
+		res.PortsOpened = append(res.PortsOpened, fr.Opened...)
+		res.PortsOpened = append(res.PortsOpened, fr.Skipped...)
+	}
+	if fr != nil && fr.Firewall == "none" {
+		res.Skipped = append(res.Skipped, "firewall")
 	}
 	return nil
 }
@@ -274,49 +303,6 @@ func ensureSysctl(res *Result) error {
 	_ = exec.Command("sysctl", "--system").Run()
 	util.Infof("已写入内核参数: %s", path)
 	return nil
-}
-
-func detectFirewall() string {
-	if dockerx.Which("firewall-cmd") {
-		if exec.Command("firewall-cmd", "--state").Run() == nil {
-			return "firewalld"
-		}
-	}
-	if dockerx.Which("ufw") {
-		return "ufw"
-	}
-	if dockerx.Which("iptables") {
-		return "iptables"
-	}
-	return "none"
-}
-
-func openPort(fw string, port int) error {
-	switch fw {
-	case "firewalld":
-		cmd := exec.Command("firewall-cmd", "--permanent",
-			fmt.Sprintf("--add-port=%d/tcp", port))
-		if out, err := cmd.CombinedOutput(); err != nil {
-			if strings.Contains(string(out), "ALREADY_ENABLED") {
-				return nil
-			}
-			return fmt.Errorf("%s", strings.TrimSpace(string(out)))
-		}
-		return exec.Command("firewall-cmd", "--reload").Run()
-	case "ufw":
-		return exec.Command("ufw", "allow", fmt.Sprintf("%d/tcp", port)).Run()
-	case "iptables":
-		// 幂等：先查后加
-		check := exec.Command("iptables", "-C", "INPUT", "-p", "tcp", "--dport",
-			fmt.Sprintf("%d", port), "-j", "ACCEPT")
-		if check.Run() == nil {
-			return nil
-		}
-		return exec.Command("iptables", "-A", "INPUT", "-p", "tcp", "--dport",
-			fmt.Sprintf("%d", port), "-j", "ACCEPT").Run()
-	default:
-		return fmt.Errorf("未知防火墙: %s", fw)
-	}
 }
 
 func copyFile(src, dst string) error {

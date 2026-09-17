@@ -14,20 +14,37 @@ import (
 	"github.com/wpg/wpgctl/internal/util"
 )
 
-// DeploymentRecord 单次部署/升级/回滚记录。
+// DeploymentRecord 单次部署/升级/回滚记录（亦即「交付单」核心字段）。
 type DeploymentRecord struct {
-	ID           string    `json:"id"`
-	Time         time.Time `json:"time"`
-	Operator     string    `json:"operator"`
-	Action       string    `json:"action"` // deploy / upgrade / rollback
-	PackageKind  string    `json:"packageKind"`
-	PackageVer   string    `json:"packageVersion"`
-	SiteCode     string    `json:"siteCode"`
-	SiteHash     string    `json:"siteHash"`
-	Success      bool      `json:"success"`
-	DurationSec  int64     `json:"durationSec"`
-	Message      string    `json:"message,omitempty"`
-	ServiceTags  map[string]string `json:"serviceTags,omitempty"` // 服务名 -> 镜像 tag
+	ID          string            `json:"id"`
+	Time        time.Time         `json:"time"`
+	Operator    string            `json:"operator"`
+	Action      string            `json:"action"` // deploy / upgrade / rollback
+	PackageKind string            `json:"packageKind"`
+	PackageVer  string            `json:"packageVersion"`
+	SiteCode    string            `json:"siteCode"`
+	SiteName    string            `json:"siteName,omitempty"`
+	SiteHash    string            `json:"siteHash"`
+	Success     bool              `json:"success"`
+	DurationSec int64             `json:"durationSec"`
+	Message     string            `json:"message,omitempty"`
+	ServiceTags map[string]string `json:"serviceTags,omitempty"`
+	// 交付验收
+	Title           string         `json:"title,omitempty"`
+	Scenario        string         `json:"scenario,omitempty"` // windows | linux
+	Profiles        []string       `json:"profiles,omitempty"`
+	ServiceCount    int            `json:"serviceCount,omitempty"`
+	AcceptanceOK    bool           `json:"acceptanceOk,omitempty"`
+	AcceptanceNotes []string       `json:"acceptanceNotes,omitempty"`
+	Smoke           []SmokeSummary `json:"smoke,omitempty"`
+}
+
+// SmokeSummary 验收报告中的服务健康摘要。
+type SmokeSummary struct {
+	Name    string `json:"name"`
+	Port    int    `json:"port"`
+	OK      bool   `json:"ok"`
+	Message string `json:"message"`
 }
 
 // Store 本地 JSON 台账存储。

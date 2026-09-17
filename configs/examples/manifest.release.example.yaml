@@ -40,7 +40,7 @@ services:
     health: { type: http, path: /actuator/health, timeoutSec: 120 }
   - name: waterwork-device
     image: waterwork-device:4.0.2
-    profile: smartwater
+    profile: waterwork
     layer: 3
     port: 8402
     health: { type: http, path: /actuator/health, timeoutSec: 120 }
@@ -60,6 +60,6 @@ frontend:
     archive: frontend/dist-web.tar.gz
     nginxHtmlSubdir: web
 sql:
-  - dir: sql/smartwater
-    database: smartwater
+  - dir: sql/waterwork
+    database: waterwork
     driver: mysql

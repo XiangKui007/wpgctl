@@ -90,27 +90,102 @@ func Run(opts Options) (*Result, error) {
 }
 
 func collectLocalParts(dir string) ([]string, error) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, err
-	}
-	var parts []string
-	for _, e := range entries {
-		name := e.Name()
-		if strings.Contains(name, ".tar.gz") || strings.HasSuffix(name, ".part") ||
-			strings.Contains(name, ".tar.gz.") {
-			parts = append(parts, filepath.Join(dir, name))
-		}
-	}
+	parts := findArchiveParts(dir)
 	if len(parts) == 0 {
 		// 若已是完整包目录（含 manifest），直接返回空让上层复制
-		if util.FileExists(filepath.Join(dir, "manifest.yaml")) {
-			return nil, fmt.Errorf("LOCAL_READY:" + dir)
+		if ready := findReadyPackageDir(dir); ready != "" {
+			return nil, fmt.Errorf("LOCAL_READY:" + ready)
 		}
-		return nil, fmt.Errorf("本地目录未找到分卷文件: %s", dir)
+		if findLegacyMiddlewareDir(dir) == "" {
+			if res, expandErr := ExpandArchives(dir); expandErr == nil &&
+				(res.ZipExtracted > 0 || res.TarUnwrapped > 0) {
+				util.Infof("已自动解压 %d 个 zip、展开 %d 个 tar.zip", res.ZipExtracted, res.TarUnwrapped)
+				parts = findArchiveParts(dir)
+			}
+		}
+		if len(parts) > 0 {
+			return parts, nil
+		}
+		if legacy := findLegacyMiddlewareDir(dir); legacy != "" {
+			return nil, fmt.Errorf(
+				"检测到旧版中间件目录（%s），不是 wpgctl 交付包。\n"+
+					"包中心只接受：① 含 manifest.yaml 的 release/base 包目录；② .tar.gz / 分卷文件。\n"+
+					"此目录是各服务独立 compose + 镜像 tar，请在各服务子目录手动 docker compose up，"+
+					"或把带 manifest.yaml 的业务包填到交付向导的「Release 包目录」",
+				legacy,
+			)
+		}
+		return nil, fmt.Errorf(
+			"本地目录未找到可用包：需要 *.tar.gz / *.tar.gz.aa 分卷，或含 manifest.yaml 的完整包目录（当前: %s）",
+			dir,
+		)
 	}
 	sort.Strings(parts)
 	return parts, nil
+}
+
+func findArchiveParts(dir string) []string {
+	var parts []string
+	_ = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info == nil || info.IsDir() {
+			return nil
+		}
+		name := info.Name()
+		lower := strings.ToLower(name)
+		if strings.Contains(lower, ".tar.gz") || strings.HasSuffix(lower, ".part") ||
+			strings.Contains(lower, ".tar.gz.") {
+			parts = append(parts, path)
+		}
+		return nil
+	})
+	sort.Strings(parts)
+	return parts
+}
+
+// findReadyPackageDir 返回含 manifest.yaml 的包根（含一层同名嵌套）。
+func findReadyPackageDir(dir string) string {
+	if util.FileExists(filepath.Join(dir, "manifest.yaml")) {
+		return dir
+	}
+	nested := filepath.Join(dir, filepath.Base(dir))
+	if util.FileExists(filepath.Join(nested, "manifest.yaml")) {
+		return nested
+	}
+	return ""
+}
+
+// findLegacyMiddlewareDir 识别「每服务一个 compose + 镜像 tar」的旧中间件包。
+func findLegacyMiddlewareDir(dir string) string {
+	for _, candidate := range []string{dir, filepath.Join(dir, filepath.Base(dir))} {
+		if looksLikeLegacyMiddleware(candidate) {
+			return candidate
+		}
+	}
+	return ""
+}
+
+func looksLikeLegacyMiddleware(dir string) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) == 0 {
+		return false
+	}
+	composeCount := 0
+	tarCount := 0
+	for _, e := range entries {
+		if !e.IsDir() {
+			name := strings.ToLower(e.Name())
+			if strings.HasSuffix(name, ".tar") || strings.HasSuffix(name, ".tar.zip") {
+				tarCount++
+			}
+			continue
+		}
+		sub := filepath.Join(dir, e.Name())
+		if util.FileExists(filepath.Join(sub, "docker-compose.yml")) ||
+			util.FileExists(filepath.Join(sub, "docker-compose.yaml")) {
+			composeCount++
+		}
+	}
+	return composeCount >= 3 || (composeCount >= 1 && tarCount >= 1)
 }
 
 func downloadParts(base, name, work string) ([]string, error) {

@@ -55,9 +55,10 @@ func newPrecheckCmd() *cobra.Command {
 
 func newInitCmd() *cobra.Command {
 	var (
-		basePkg      string
-		manifestPath string
-		localOnly    bool
+		basePkg       string
+		dockerPkg     string
+		manifestPath  string
+		localOnly     bool
 	)
 	c := &cobra.Command{
 		Use:   "init",
@@ -75,7 +76,7 @@ func newInitCmd() *cobra.Command {
 					return err
 				}
 			}
-			res, err := runInit(site, mf, basePkg, localOnly)
+			res, err := runInit(site, mf, basePkg, dockerPkg, localOnly)
 			if err != nil {
 				return err
 			}
@@ -84,7 +85,8 @@ func newInitCmd() *cobra.Command {
 			return nil
 		},
 	}
-	c.Flags().StringVar(&basePkg, "base", "", "base 包解压目录（含 docker-install/）")
+	c.Flags().StringVar(&basePkg, "base", "", "base 包解压目录（含 docker-install/ 或 docker_package/）")
+	c.Flags().StringVar(&dockerPkg, "docker-package", "", "Docker 离线安装目录（含 offline_install_docker.sh）")
 	c.Flags().StringVar(&manifestPath, "manifest", "", "manifest.yaml 路径")
 	c.Flags().BoolVar(&localOnly, "local", false, "仅本机初始化，不做 SSH 分发")
 	return c
@@ -173,6 +175,24 @@ func newDBCmd() *cobra.Command {
 	apply.Flags().BoolVar(&dryRun, "dry-run", false, "仅列出将执行的脚本")
 	dbCmd.AddCommand(apply)
 	return dbCmd
+}
+
+func newFirewallCmd() *cobra.Command {
+	var manifestPath string
+	c := &cobra.Command{
+		Use:   "firewall",
+		Short: "防火墙端口放行",
+	}
+	open := &cobra.Command{
+		Use:   "open",
+		Short: "放行站点服务端口（部署完成后执行，需 root）",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runFirewallOpen(flagSitePath, manifestPath)
+		},
+	}
+	open.Flags().StringVar(&manifestPath, "manifest", "", "manifest.yaml（可选，用于精确端口列表）")
+	c.AddCommand(open)
+	return c
 }
 
 func newNacosCmd() *cobra.Command {
@@ -300,7 +320,7 @@ func newPackCmd() *cobra.Command {
 				kind = args[0]
 			}
 			if kind == "" {
-				return fmt.Errorf("请指定 kind：base|release|patch")
+				return fmt.Errorf("请指定 kind：base|release|patch（或使用: wpgctl pack scan <目录>）")
 			}
 			return runPack(kind, version, manifest, output, services, baseRelease, workDir, volumeSizeGB)
 		},
@@ -313,5 +333,32 @@ func newPackCmd() *cobra.Command {
 	c.Flags().StringVar(&baseRelease, "base-release", "", "patch 基线 release 版本")
 	c.Flags().StringVar(&workDir, "work-dir", "", "待打包内容目录")
 	c.Flags().IntVar(&volumeSizeGB, "volume-size-gb", 2, "分卷大小（GB）")
+
+	c.AddCommand(newPackScanCmd())
+	return c
+}
+
+func newPackScanCmd() *cobra.Command {
+	var (
+		out     string
+		kind    string
+		version string
+		arch    string
+		write   bool
+	)
+	c := &cobra.Command{
+		Use:   "scan [dir]",
+		Short: "扫描包目录内镜像 tar，自动生成 manifest.yaml",
+		Long:  "递归查找 .tar / .tar.gz 镜像包，从文件名解析服务名与版本，生成可编辑的 manifest.yaml。",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runPackScan(args[0], out, kind, version, arch, write)
+		},
+	}
+	c.Flags().StringVarP(&out, "out", "o", "", "输出文件路径（默认打印到 stdout；--write 时默认 <dir>/manifest.yaml）")
+	c.Flags().StringVar(&kind, "kind", "base", "base|release")
+	c.Flags().StringVar(&version, "version", "", "包版本（默认从目录名推断或 1.0.0）")
+	c.Flags().StringVar(&arch, "arch", "amd64", "架构")
+	c.Flags().BoolVar(&write, "write", false, "写入目录内 manifest.yaml")
 	return c
 }

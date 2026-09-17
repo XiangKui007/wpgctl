@@ -49,6 +49,10 @@ func Run(opts Options) (*Result, error) {
 	if opts.Site == nil {
 		return nil, fmt.Errorf("site 不能为空")
 	}
+	if opts.Site.Middleware.MySQL.Disabled {
+		util.Warnf("site 已标记跳过 MySQL，db apply 跳过")
+		return &Result{}, nil
+	}
 	sqlRoot := filepath.Join(opts.PackageDir, "sql")
 	if !util.DirExists(sqlRoot) {
 		util.Warnf("包内无 sql/ 目录，跳过")

@@ -51,6 +51,7 @@ func init() {
 	rootCmd.AddCommand(newDeployCmd())
 	rootCmd.AddCommand(newDBCmd())
 	rootCmd.AddCommand(newNacosCmd())
+	rootCmd.AddCommand(newFirewallCmd())
 	rootCmd.AddCommand(newUpgradeCmd())
 	rootCmd.AddCommand(newRollbackCmd())
 	rootCmd.AddCommand(newStatusCmd())

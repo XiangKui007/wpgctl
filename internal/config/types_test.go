@@ -28,13 +28,41 @@ func TestLoadManifestExample(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadManifest: %v", err)
 	}
-	svcs := m.EnabledServices([]string{"platform", "smartwater"})
+	svcs := m.EnabledServices([]string{"platform", "waterwork"})
 	if len(svcs) < 3 {
 		t.Fatalf("expected middleware + platform services, got %d", len(svcs))
 	}
 	ports := m.Ports([]string{"platform"})
 	if len(ports) == 0 {
 		t.Fatal("ports empty")
+	}
+}
+
+func TestValidateSkipMySQLRequiresPgSQL(t *testing.T) {
+	cfg := &config.SiteConfig{
+		Site:     config.SiteInfo{Name: "demo", Code: "plant-demo"},
+		Profiles: []string{"platform"},
+		Nodes: []config.Node{{
+			Name:  "n1",
+			IP:    "10.0.0.1",
+			SSH:   config.SSHAuth{User: "root", Port: 22},
+			Roles: []string{"platform"},
+		}},
+		Middleware: config.MiddlewareConfig{
+			Nacos: config.NacosConn{Host: "10.0.0.1", Port: 8848, Namespace: "ns", Username: "nacos", Password: "p"},
+			MySQL: config.DBConn{Disabled: true},
+			PgSQL: config.DBConn{Host: "10.0.0.1", Port: 5433, User: "wpg", Password: "p", Database: "waterwork"},
+			Redis: config.RedisConn{Host: "10.0.0.1", Port: 6377, Password: "p"},
+			Kafka: config.KafkaConn{Host: "10.0.0.1", Port: 9092},
+		},
+		Paths: config.PathsConfig{Workspace: "/w", Logs: "/l", NginxHTML: "/n"},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("expected valid pg-only site: %v", err)
+	}
+	cfg.Middleware.PgSQL.Host = ""
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected pgsql required when mysql disabled")
 	}
 }
 

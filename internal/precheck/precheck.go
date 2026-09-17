@@ -35,6 +35,7 @@ type Item struct {
 	Name     string   `json:"name"`
 	Severity Severity `json:"severity"`
 	Message  string   `json:"message"`
+	Hint     string   `json:"hint,omitempty"` // 可执行建议
 }
 
 // Report 完整体检报告。
@@ -65,6 +66,9 @@ func Run(opts Options) (*Report, error) {
 	r.add(checkKernel())
 	r.add(checkArch(opts.Manifest))
 	r.add(checkDocker())
+	if tip := checkWindowsComposeTips(); tip.Name != "" {
+		r.add(tip)
+	}
 	if opts.Manifest != nil && opts.Site != nil {
 		r.add(checkPorts(opts.Manifest.Ports(opts.Site.Profiles))...)
 	}
@@ -142,7 +146,14 @@ func checkMemory(m *config.Manifest) Item {
 	}
 	gb := float64(totalMB) / 1024
 	if gb < float64(minGB) {
-		return Item{Name: "内存", Severity: SeverityRed, Message: fmt.Sprintf("%.1f GB < 最低 %d GB", gb, minGB)}
+		sev := SeverityRed
+		hint := "增加内存或降低并发部署的服务组合（减少 profiles）"
+		// 本机联调场景：略低于声明最低也允许黄灯放行，避免 Demo 机器被硬拦
+		if gb >= float64(minGB)*0.7 {
+			sev = SeverityYellow
+			hint = "内存低于 manifest 建议值，可继续但建议关闭其他占内存程序"
+		}
+		return Item{Name: "内存", Severity: sev, Message: fmt.Sprintf("%.1f GB < 最低 %d GB", gb, minGB), Hint: hint}
 	}
 	return Item{Name: "内存", Severity: SeverityGreen, Message: fmt.Sprintf("%.1f GB", gb)}
 }
@@ -162,14 +173,33 @@ func checkDisk(site *config.SiteConfig, m *config.Manifest) Item {
 		minGB = m.MinDiskGB
 	}
 	if freeGB < float64(minGB) {
-		return Item{Name: "磁盘", Severity: SeverityRed, Message: fmt.Sprintf("%.1f GB 可用 < 最低 %d GB", freeGB, minGB)}
+		return Item{
+			Name: "磁盘", Severity: SeverityRed,
+			Message: fmt.Sprintf("%.1f GB 可用 < 最低 %d GB", freeGB, minGB),
+			Hint:    "清理磁盘，或把 paths.workspace 改到更大的盘（如 D:/workspace）",
+		}
 	}
 	return Item{Name: "磁盘", Severity: SeverityGreen, Message: fmt.Sprintf("%.1f GB 可用 (%s)", freeGB, path)}
 }
 
 func checkKernel() Item {
+	if runtime.GOOS == "windows" {
+		r := dockerx.New()
+		if dockerx.Which("docker") && r.Available() {
+			return Item{
+				Name:     "平台",
+				Severity: SeverityGreen,
+				Message:  "Windows + Docker Desktop（Linux 容器引擎已就绪，可用于本机部署）",
+			}
+		}
+		return Item{
+			Name:     "平台",
+			Severity: SeverityYellow,
+			Message:  "Windows：请安装并启动 Docker Desktop 后再部署（WSL2 后端推荐）",
+		}
+	}
 	if runtime.GOOS != "linux" {
-		return Item{Name: "内核", Severity: SeverityYellow, Message: fmt.Sprintf("当前 OS=%s，现场目标为 Linux，本机仅供演练", runtime.GOOS)}
+		return Item{Name: "平台", Severity: SeverityYellow, Message: fmt.Sprintf("当前 OS=%s，请确认已安装可用的 Docker", runtime.GOOS)}
 	}
 	out, err := exec.Command("uname", "-r").Output()
 	if err != nil {
@@ -203,10 +233,24 @@ func checkArch(m *config.Manifest) Item {
 func checkDocker() Item {
 	r := dockerx.New()
 	if !dockerx.Which("docker") {
-		return Item{Name: "Docker", Severity: SeverityYellow, Message: "未安装，可由 wpgctl init 离线安装"}
+		if runtime.GOOS == "windows" {
+			return Item{
+				Name: "Docker", Severity: SeverityRed,
+				Message: "未检测到 docker，请安装 Docker Desktop 并勾选「启动时打开」",
+				Hint:    "安装后从开始菜单启动 Docker Desktop，等待托盘图标变绿，再重新体检",
+			}
+		}
+		return Item{Name: "Docker", Severity: SeverityYellow, Message: "未安装，可由 wpgctl init 离线安装", Hint: "向导中选择 Docker 离线目录（含 offline_install_docker.sh），或 --docker-package / --base"}
 	}
 	if !r.Available() {
-		return Item{Name: "Docker", Severity: SeverityYellow, Message: "docker 命令存在但 daemon 不可用"}
+		if runtime.GOOS == "windows" {
+			return Item{
+				Name: "Docker", Severity: SeverityRed,
+				Message: "Docker Desktop 未运行：请从托盘启动，待引擎变绿后再试",
+				Hint:    "右键托盘鲸鱼图标 → Start；或重启 Docker Desktop",
+			}
+		}
+		return Item{Name: "Docker", Severity: SeverityYellow, Message: "docker 命令存在但 daemon 不可用", Hint: "检查 systemctl status docker"}
 	}
 	ver, err := r.Version()
 	if err != nil {
@@ -215,7 +259,23 @@ func checkDocker() Item {
 	if !versionGTE(ver, "20.10") {
 		return Item{Name: "Docker", Severity: SeverityRed, Message: ver + " < 20.10"}
 	}
-	return Item{Name: "Docker", Severity: SeverityGreen, Message: "Server " + ver}
+	msg := "Server " + ver
+	if runtime.GOOS == "windows" {
+		msg = "Docker Desktop · Server " + ver
+	}
+	return Item{Name: "Docker", Severity: SeverityGreen, Message: msg}
+}
+
+// checkWindowsComposeTips 提示 Windows 上 host 网络等差异（黄灯，不阻断）。
+func checkWindowsComposeTips() Item {
+	if runtime.GOOS != "windows" {
+		return Item{}
+	}
+	return Item{
+		Name:     "Windows 提示",
+		Severity: SeverityYellow,
+		Message:  "Docker Desktop 不支持 Linux 的 network_mode:host；若包内大量 host 网络，请改用 bridge+端口映射，或在 WSL2/Linux 主控机部署。paths 请用本机路径如 D:/workspace/waterwork",
+	}
 }
 
 func checkPorts(ports []int) []Item {
@@ -227,7 +287,10 @@ func checkPorts(ports []int) []Item {
 			continue
 		}
 		if inUse {
-			items = append(items, Item{Name: fmt.Sprintf("端口:%d", p), Severity: SeverityRed, Message: "已被占用"})
+			items = append(items, Item{
+				Name: fmt.Sprintf("端口:%d", p), Severity: SeverityRed, Message: "已被占用",
+				Hint: "用 netstat/ss 查占用进程，停掉冲突服务或改 site/manifest 端口后再部署",
+			})
 		} else {
 			items = append(items, Item{Name: fmt.Sprintf("端口:%d", p), Severity: SeverityGreen, Message: "空闲"})
 		}
@@ -244,9 +307,14 @@ func checkMiddlewareConnectivity(site *config.SiteConfig) []Item {
 	}
 	eps := []ep{
 		{"连通:Nacos", site.Middleware.Nacos.Host, site.Middleware.Nacos.Port},
-		{"连通:MySQL", site.Middleware.MySQL.Host, site.Middleware.MySQL.Port},
 		{"连通:Redis", site.Middleware.Redis.Host, site.Middleware.Redis.Port},
 		{"连通:Kafka", site.Middleware.Kafka.Host, site.Middleware.Kafka.Port},
+	}
+	if !site.Middleware.MySQL.Disabled {
+		eps = append(eps, ep{"连通:MySQL", site.Middleware.MySQL.Host, site.Middleware.MySQL.Port})
+	}
+	if site.Middleware.PgSQL.Host != "" && site.Middleware.PgSQL.Port > 0 {
+		eps = append(eps, ep{"连通:PgSQL", site.Middleware.PgSQL.Host, site.Middleware.PgSQL.Port})
 	}
 	var items []Item
 	for _, e := range eps {

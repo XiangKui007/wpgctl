@@ -23,86 +23,89 @@ import (
 
 // SiteConfig 现场站点配置（唯一配置源）。
 type SiteConfig struct {
-	Site       SiteInfo            `yaml:"site"`
-	Nodes      []Node              `yaml:"nodes"`
-	Profiles   []string            `yaml:"profiles"`
-	Middleware MiddlewareConfig    `yaml:"middleware"`
-	Overrides  map[string]Override `yaml:"overrides,omitempty"`
-	Paths      PathsConfig         `yaml:"paths"`
+	Site       SiteInfo            `yaml:"site" json:"site"`
+	Nodes      []Node              `yaml:"nodes" json:"nodes"`
+	Profiles   []string            `yaml:"profiles" json:"profiles"`
+	Middleware MiddlewareConfig    `yaml:"middleware" json:"middleware"`
+	Overrides  map[string]Override `yaml:"overrides,omitempty" json:"overrides,omitempty"`
+	Paths      PathsConfig         `yaml:"paths" json:"paths"`
 	// FetchBaseURL 公司侧拉包地址，可选。
-	FetchBaseURL string `yaml:"fetchBaseUrl,omitempty"`
+	FetchBaseURL string `yaml:"fetchBaseUrl,omitempty" json:"fetchBaseUrl,omitempty"`
 }
 
 // SiteInfo 站点基本信息。
 type SiteInfo struct {
-	Name string `yaml:"name"`
-	Code string `yaml:"code"`
+	Name string `yaml:"name" json:"name"`
+	Code string `yaml:"code" json:"code"`
 }
 
 // Node 机器节点定义。
 type Node struct {
-	Name  string   `yaml:"name"`
-	IP    string   `yaml:"ip"`
-	SSH   SSHAuth  `yaml:"ssh"`
-	Roles []string `yaml:"roles"`
+	Name  string   `yaml:"name" json:"name"`
+	IP    string   `yaml:"ip" json:"ip"`
+	SSH   SSHAuth  `yaml:"ssh" json:"ssh"`
+	Roles []string `yaml:"roles" json:"roles"`
 }
 
 // SSHAuth SSH 连接参数（密码运行时交互或密钥，不强制写入文件）。
 type SSHAuth struct {
-	User string `yaml:"user"`
-	Port int    `yaml:"port"`
+	User string `yaml:"user" json:"user"`
+	Port int    `yaml:"port" json:"port"`
 }
 
 // MiddlewareConfig 中间件连接参数，渲染进全部 env / nacos 模板。
 type MiddlewareConfig struct {
-	Nacos NacosConn `yaml:"nacos"`
-	MySQL DBConn    `yaml:"mysql"`
-	PgSQL DBConn    `yaml:"pgsql,omitempty"`
-	Redis RedisConn `yaml:"redis"`
-	Kafka KafkaConn `yaml:"kafka"`
+	Nacos NacosConn `yaml:"nacos" json:"nacos"`
+	MySQL DBConn    `yaml:"mysql" json:"mysql"`
+	PgSQL DBConn    `yaml:"pgsql,omitempty" json:"pgsql,omitempty"`
+	Redis RedisConn `yaml:"redis" json:"redis"`
+	Kafka KafkaConn `yaml:"kafka" json:"kafka"`
 }
 
 // NacosConn Nacos 连接信息。
 type NacosConn struct {
-	Host     string `yaml:"host"`
-	Port     int    `yaml:"port"`
-	Namespace string `yaml:"namespace"`
-	Username string `yaml:"username"`
-	Password string `yaml:"password"`
+	Host      string `yaml:"host" json:"host"`
+	Port      int    `yaml:"port" json:"port"`
+	Namespace string `yaml:"namespace" json:"namespace"`
+	Username  string `yaml:"username" json:"username"`
+	Password  string `yaml:"password" json:"password"`
 }
 
 // DBConn 数据库连接信息（MySQL / PostgreSQL 通用）。
 type DBConn struct {
-	Host     string `yaml:"host"`
-	Port     int    `yaml:"port"`
-	User     string `yaml:"user"`
-	Password string `yaml:"password"`
-	Database string `yaml:"database,omitempty"`
+	Disabled bool   `yaml:"disabled,omitempty" json:"disabled,omitempty"` // MySQL：true 表示不部署/不依赖
+	Host     string `yaml:"host" json:"host"`
+	Port     int    `yaml:"port" json:"port"`
+	User     string `yaml:"user" json:"user"`
+	Password string `yaml:"password" json:"password"`
+	Database string `yaml:"database,omitempty" json:"database,omitempty"` // 可选；各业务 .env 自有库名，site 级一般不统一
 }
 
 // RedisConn Redis 连接信息。
 type RedisConn struct {
-	Host     string `yaml:"host"`
-	Port     int    `yaml:"port"`
-	Password string `yaml:"password"`
+	Host     string `yaml:"host" json:"host"`
+	Port     int    `yaml:"port" json:"port"`
+	Password string `yaml:"password" json:"password"`
 }
 
 // KafkaConn Kafka 连接信息。
 type KafkaConn struct {
-	Host string `yaml:"host"`
-	Port int    `yaml:"port"`
+	Host string `yaml:"host" json:"host"`
+	Port int    `yaml:"port" json:"port"`
 }
 
 // Override 服务级覆盖项（如 JVM 堆内存）。
 type Override struct {
-	Xmx string `yaml:"xmx,omitempty"`
+	Xmx string `yaml:"xmx,omitempty" json:"xmx,omitempty"`
 }
 
 // PathsConfig 现场路径规划。
 type PathsConfig struct {
-	Workspace string `yaml:"workspace"`
-	Logs      string `yaml:"logs"`
-	NginxHTML string `yaml:"nginxHtml"`
+	Workspace        string `yaml:"workspace" json:"workspace"`
+	Logs             string `yaml:"logs,omitempty" json:"logs,omitempty"` // 可选；各模块 compose 通常已挂载日志目录
+	NginxHTML        string `yaml:"nginxHtml" json:"nginxHtml"`
+	Waterwork        string `yaml:"waterwork,omitempty" json:"waterwork,omitempty"`               // 市政水厂包目录，如 waterwork-4.1.1
+	IntelligentModel string `yaml:"intelligentModel,omitempty" json:"intelligentModel,omitempty"` // 模型服务包目录，如 wpg-intelligent-model-4.1.2
 }
 
 // ---------------------------------------------------------------------------
@@ -168,15 +171,16 @@ type SQLSpec struct {
 var (
 	reSiteCode = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{1,63}$`)
 	reVersion  = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+([._-][a-zA-Z0-9._-]+)?$`)
-	// 合法 profile 字典（与附录 A.4 对齐，含 smartwater 兼容别名）。
+	// 合法 profile 字典（platform 子模块 + 独立业务包 profile）。
 	validProfiles = map[string]struct{}{
-		"platform":   {},
-		"smartwater": {},
-		"device":     {},
-		"alarm":      {},
-		"gis":        {},
-		"monitor":    {},
-		"graph":      {},
+		"platform":          {},
+		"waterwork":         {}, // 市政水厂（独立包）
+		"intelligent-model": {}, // 模型服务（独立包）
+		"device":            {},
+		"alarm":             {},
+		"gis":               {},
+		"monitor":           {},
+		"graph":             {},
 	}
 )
 
@@ -198,6 +202,7 @@ func LoadSite(path string) (*SiteConfig, error) {
 	if err := decStrict.Decode(cfg); err != nil {
 		return nil, fmt.Errorf("site.yaml 字段非法或存在未知字段: %w", err)
 	}
+	cfg.Normalize()
 	if err := cfg.ResolveSecrets(); err != nil {
 		return nil, err
 	}
@@ -205,6 +210,55 @@ func LoadSite(path string) (*SiteConfig, error) {
 		return nil, err
 	}
 	return cfg, nil
+}
+
+// Normalize 升级旧版 site.yaml 字段（如已废弃的 profile 名）。
+func (c *SiteConfig) Normalize() {
+	if c == nil {
+		return
+	}
+	c.Profiles = normalizeProfileList(c.Profiles)
+	for i := range c.Nodes {
+		c.Nodes[i].Roles = normalizeRoleList(c.Nodes[i].Roles)
+	}
+}
+
+func normalizeProfileList(in []string) []string {
+	if len(in) == 0 {
+		return in
+	}
+	out := make([]string, 0, len(in))
+	seen := map[string]struct{}{}
+	for _, p := range in {
+		if p == "smartwater" {
+			p = "waterwork"
+		}
+		if _, ok := seen[p]; ok {
+			continue
+		}
+		seen[p] = struct{}{}
+		out = append(out, p)
+	}
+	return out
+}
+
+func normalizeRoleList(in []string) []string {
+	if len(in) == 0 {
+		return in
+	}
+	out := make([]string, 0, len(in))
+	seen := map[string]struct{}{}
+	for _, r := range in {
+		if r == "smartwater" {
+			r = "waterwork"
+		}
+		if _, ok := seen[r]; ok {
+			continue
+		}
+		seen[r] = struct{}{}
+		out = append(out, r)
+	}
+	return out
 }
 
 // ResolveSecrets 解密 middleware 中带 !vault: 前缀的密码字段。
@@ -311,9 +365,6 @@ func (c *SiteConfig) Validate() error {
 	if c.Paths.Workspace == "" {
 		errs = append(errs, "paths.workspace 不能为空")
 	}
-	if c.Paths.Logs == "" {
-		errs = append(errs, "paths.logs 不能为空")
-	}
 	if c.Paths.NginxHTML == "" {
 		errs = append(errs, "paths.nginxHtml 不能为空")
 	}
@@ -343,16 +394,23 @@ func validateMiddleware(m MiddlewareConfig) []string {
 	if m.Nacos.Namespace == "" {
 		errs = append(errs, "middleware.nacos.namespace 不能为空")
 	}
-	checkHostPort("middleware.mysql", m.MySQL.Host, m.MySQL.Port)
-	if m.MySQL.User == "" || m.MySQL.Password == "" {
-		errs = append(errs, "middleware.mysql.user/password 不能为空")
+	if !m.MySQL.Disabled {
+		checkHostPort("middleware.mysql", m.MySQL.Host, m.MySQL.Port)
+		if m.MySQL.User == "" || m.MySQL.Password == "" {
+			errs = append(errs, "middleware.mysql.user/password 不能为空")
+		}
+	} else {
+		checkHostPort("middleware.pgsql", m.PgSQL.Host, m.PgSQL.Port)
+		if m.PgSQL.User == "" || m.PgSQL.Password == "" {
+			errs = append(errs, "middleware.pgsql.user/password 不能为空（已跳过 MySQL）")
+		}
 	}
 	checkHostPort("middleware.redis", m.Redis.Host, m.Redis.Port)
 	if m.Redis.Password == "" {
 		errs = append(errs, "middleware.redis.password 不能为空")
 	}
 	checkHostPort("middleware.kafka", m.Kafka.Host, m.Kafka.Port)
-	if m.PgSQL.Host != "" {
+	if !m.MySQL.Disabled && m.PgSQL.Host != "" {
 		checkHostPort("middleware.pgsql", m.PgSQL.Host, m.PgSQL.Port)
 	}
 	return errs

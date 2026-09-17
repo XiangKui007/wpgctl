@@ -12,18 +12,19 @@ nodes:
   - name: app-node
     ip: 10.10.104.22
     ssh: { user: root, port: 22 }
-    roles: [middleware, platform, smartwater, monitor]
+    roles: [middleware, platform, waterwork, monitor]
 
-# ===== 启用的业务模块（映射 compose profiles）=====
-profiles: [platform, smartwater, monitor]
+# ===== 启用的业务模块（platform 子模块 + 独立包 profile）=====
+profiles: [platform, waterwork, monitor]
 
 # ===== 中间件连接参数 =====
 middleware:
-  nacos: { host: 10.10.104.22, port: 8848, namespace: plant-demo,
-           username: nacos, password: "ChangeMe!" }
-  mysql: { host: 10.10.104.23, port: 3306, user: wpg, password: "ChangeMe!" }
-  pgsql: { host: 10.10.104.23, port: 5433, user: wpg, password: "ChangeMe!", database: waterwork }
-  redis: { host: 10.10.104.23, port: 6377, password: "ChangeMe!" }
+  nacos: { host: 10.10.104.22, port: 8848, namespace: intergrate,
+           username: nacos, password: "wpg@nice#LKsalk98" }
+  # 纯 PgSQL 版本可设 disabled: true，并配齐 pgsql
+  mysql: { host: 10.10.104.23, port: 3306, user: wpg, password: "DmJme(ZFl9txW@2P" }
+  pgsql: { host: 10.10.104.23, port: 5433, user: wpg, password: "t7u!m0Wpyu7EfbVN" }
+  redis: { host: 10.10.104.23, port: 6377, password: "SJ(Qu%(kfXQBjxyT" }
   kafka: { host: 10.10.104.22, port: 9092 }
 
 # ===== 站点级覆盖 =====
@@ -33,7 +34,10 @@ overrides:
 # ===== 路径规划 =====
 paths:
   workspace: /workspace/waterwork
-  logs: /workspace/waterwork-logs
-  nginxHtml: /workspace/nginx/html
+  # 与 middleware/nginx/html 一致（compose 挂载 /usr/share/nginx/html）
+  nginxHtml: /workspace/middleware/nginx/html
+  # 独立交付包（可选，非 platform/middleware 子目录）
+  waterwork: /workspace/waterwork-4.1.1
+  intelligentModel: /workspace/wpg-intelligent-model-4.1.2
 
 fetchBaseUrl: "https://packages.example.com/packages"

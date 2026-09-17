@@ -18,12 +18,82 @@ import (
 	"github.com/wpg/wpgctl/internal/util"
 )
 
+// ServiceListResult 服务状态查询结果。
+type ServiceListResult struct {
+	Services []dockerx.ComposeService `json:"services"`
+	Source   string                   `json:"source,omitempty"` // rendered | docker
+	Warning  string                   `json:"warning,omitempty"`
+}
+
+// QueryServices 查询运行状态：优先 rendered compose，否则回退 docker ps（现场逐步部署）。
+func QueryServices(composeRoot string) (ServiceListResult, error) {
+	d := dockerx.New()
+	out := ServiceListResult{}
+
+	if composeRoot != "" && util.DirExists(composeRoot) {
+		composeFile := findComposeProject(composeRoot)
+		if composeFile != "" {
+			dir := filepath.Dir(composeFile)
+			file := filepath.Base(composeFile)
+			list, err := d.ComposePs(dir, file)
+			if err == nil && len(list) > 0 {
+				out.Services = list
+				out.Source = "rendered"
+				return out, nil
+			}
+		}
+	}
+
+	list, err := d.ListContainers()
+	if err != nil {
+		return out, err
+	}
+	out.Services = list
+	out.Source = "docker"
+	if len(list) == 0 {
+		out.Warning = "未发现运行中的容器。若使用现场逐步部署，请确认各模块 compose up 已执行。"
+	} else {
+		out.Warning = "现场逐步部署模式：无 rendered compose 项目，已用 docker ps 汇总。"
+	}
+	return out, nil
+}
+
+func findComposeProject(root string) string {
+	if root == "" || !util.DirExists(root) {
+		return ""
+	}
+	for _, name := range []string{"docker-compose.yml", "docker-compose.yaml", "compose.yml"} {
+		p := filepath.Join(root, name)
+		if util.FileExists(p) {
+			return p
+		}
+	}
+	var found string
+	_ = filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil || found != "" {
+			return nil
+		}
+		if info.IsDir() {
+			return nil
+		}
+		base := info.Name()
+		if base == "docker-compose.yml" || base == "docker-compose.yaml" || base == "compose.yml" {
+			found = path
+		}
+		return nil
+	})
+	return found
+}
+
 // ShowStatus 表格输出服务运行状态。
 func ShowStatus(site *config.SiteConfig, composeDir string) error {
-	d := dockerx.New()
-	list, err := d.ComposePs(composeDir, "")
+	res, err := QueryServices(composeDir)
 	if err != nil {
-		return fmt.Errorf("获取 compose 状态失败: %w", err)
+		return fmt.Errorf("获取服务状态失败: %w", err)
+	}
+	list := res.Services
+	if res.Warning != "" {
+		fmt.Println("提示:", res.Warning)
 	}
 	fmt.Printf("%-24s %-12s %-16s %-40s\n", "服务", "状态", "健康", "镜像")
 	fmt.Println("--------------------------------------------------------------------------------")

@@ -19,13 +19,19 @@ import (
 
 // Options 部署选项。
 type Options struct {
-	Site       *config.SiteConfig
-	Manifest   *config.Manifest
-	PackageDir string
-	SitePath   string // 用于计算 site hash
-	Concurrency int   // docker load 并发度，默认 3
-	SkipRender bool
-	DryRun     bool
+	Site        *config.SiteConfig
+	Manifest    *config.Manifest
+	PackageDir  string
+	SitePath    string // 用于计算 site hash
+	Concurrency int    // docker load 并发度，默认 3
+	SkipRender  bool
+	DryRun      bool
+	// OnProgress 可选进度回调（层号、消息、当前冒烟快照）。
+	OnProgress func(layer int, message string, smoke []SmokeEntry)
+	// Operator 操作者署名（写入交付单）。
+	Operator string
+	// Scenario windows|linux
+	Scenario string
 }
 
 // SmokeReport 冒烟报告条目。
@@ -117,12 +123,15 @@ func Run(opts Options) (*Result, error) {
 			continue
 		}
 		util.Infof("======== 启动第 %d 层（%d 个服务）========", layer, len(svcs))
+		if opts.OnProgress != nil {
+			opts.OnProgress(layer, fmt.Sprintf("启动第 %d 层（%d 个服务）", layer, len(svcs)), smoke)
+		}
 
 		composeDir := filepath.Join(renderDir, "compose")
 		for _, s := range svcs {
 			file := findComposeFile(composeDir, s.Name)
 			profiles := opts.Site.Profiles
-			if err := docker.ComposeUp(composeDir, file, profiles, s.Name); err != nil {
+			if err := docker.ComposeUp(composeDir, file, profiles, false, s.Name); err != nil {
 				util.Warnf("启动 %s 失败: %v（继续健康检查以汇总）", s.Name, err)
 			}
 		}
@@ -158,13 +167,22 @@ func Run(opts Options) (*Result, error) {
 			smoke = append(smoke, entry)
 			if p.r.OK {
 				util.Successf("L%d %s 健康 (耗时 %s)", layer, p.svc.Name, p.r.Elapsed.Round(time.Second))
+				if opts.OnProgress != nil {
+					opts.OnProgress(layer, fmt.Sprintf("L%d %s 健康", layer, p.svc.Name), append([]SmokeEntry{}, smoke...))
+				}
 			} else {
 				layerOK = false
 				util.Errorf("L%d %s 失败: %s", layer, p.svc.Name, p.r.Message)
-				// 附带日志
 				logs, _ := docker.Logs(p.svc.Name, 200, false)
 				if logs != "" {
 					util.Errorf("---- %s 最近日志 ----\n%s", p.svc.Name, truncate(logs, 4000))
+				}
+				if opts.OnProgress != nil {
+					msg := fmt.Sprintf("L%d %s 失败: %s", layer, p.svc.Name, p.r.Message)
+					if logs != "" {
+						msg += "\n---- 最近日志 ----\n" + truncate(logs, 2000)
+					}
+					opts.OnProgress(layer, msg, append([]SmokeEntry{}, smoke...))
 				}
 			}
 		}
@@ -224,7 +242,7 @@ func loadImages(pkgDir string, services []config.ServiceSpec, concurrency int) e
 			sem <- struct{}{}
 			defer func() { <-sem }()
 			util.Infof("docker load: %s", path)
-			if err := docker.LoadImage(path); err != nil {
+			if _, err := docker.LoadImage(path); err != nil {
 				errCh <- err
 			}
 		}(tarPath, s.Image)
@@ -285,20 +303,52 @@ func writeDeployRecord(opts Options, res *Result, ok bool, msg string) error {
 		}
 	}
 	tags := map[string]string{}
-	for _, s := range opts.Manifest.EnabledServices(opts.Site.Profiles) {
+	svcs := opts.Manifest.EnabledServices(opts.Site.Profiles)
+	for _, s := range svcs {
 		tags[s.Name] = s.Image
 	}
+	op := opts.Operator
+	if op == "" {
+		op = os.Getenv("USERNAME")
+		if op == "" {
+			op = os.Getenv("USER")
+		}
+	}
+	smoke := make([]state.SmokeSummary, 0, len(res.Smoke))
+	allOK := ok
+	for _, e := range res.Smoke {
+		smoke = append(smoke, state.SmokeSummary{Name: e.Name, Port: e.Port, OK: e.OK, Message: e.Message})
+		if !e.OK {
+			allOK = false
+		}
+	}
+	notes := []string{}
+	if ok {
+		notes = append(notes, "容器分层启动完成")
+		if allOK && len(smoke) > 0 {
+			notes = append(notes, "全部服务健康检查通过")
+		}
+		notes = append(notes, "请人工确认前端入口与关键业务页面")
+	}
 	return st.Append(state.DeploymentRecord{
-		Operator:    os.Getenv("USER"),
-		Action:      "deploy",
-		PackageKind: opts.Manifest.Kind,
-		PackageVer:  opts.Manifest.Version,
-		SiteCode:    opts.Site.Site.Code,
-		SiteHash:    siteHash,
-		Success:     ok,
-		DurationSec: int64(res.Duration.Seconds()),
-		Message:     msg,
-		ServiceTags: tags,
+		Operator:        op,
+		Action:          "deploy",
+		PackageKind:     opts.Manifest.Kind,
+		PackageVer:      opts.Manifest.Version,
+		SiteCode:        opts.Site.Site.Code,
+		SiteName:        opts.Site.Site.Name,
+		SiteHash:        siteHash,
+		Success:         ok,
+		DurationSec:     int64(res.Duration.Seconds()),
+		Message:         msg,
+		ServiceTags:     tags,
+		Title:           fmt.Sprintf("%s 首次/全量部署 %s", opts.Site.Site.Name, opts.Manifest.Version),
+		Scenario:        opts.Scenario,
+		Profiles:        opts.Site.Profiles,
+		ServiceCount:    len(svcs),
+		AcceptanceOK:    allOK && ok,
+		AcceptanceNotes: notes,
+		Smoke:           smoke,
 	})
 }
 

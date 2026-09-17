@@ -152,7 +152,7 @@ func Run(opts Options) (*Result, error) {
 			continue
 		}
 		// 简化：直接 compose up 该服务（模板中的 image 需已指向新 tag，或依赖外部已更新）
-		if err := docker.ComposeUp(composeDir, "", opts.Site.Profiles, name); err != nil {
+		if err := docker.ComposeUp(composeDir, "", opts.Site.Profiles, false, name); err != nil {
 			util.Errorf("更新服务失败 %s: %v", name, err)
 			failed = true
 			break
@@ -246,7 +246,7 @@ func Rollback(site *config.SiteConfig, toVersion string) error {
 func rollbackServices(d *dockerx.Runner, composeDir string, profiles []string, tags map[string]string) error {
 	for name := range tags {
 		util.Warnf("回滚服务: %s", name)
-		if err := d.ComposeUp(composeDir, "", profiles, name); err != nil {
+		if err := d.ComposeUp(composeDir, "", profiles, false, name); err != nil {
 			util.Errorf("回滚 %s 失败: %v", name, err)
 		}
 	}

@@ -18,7 +18,7 @@ func newUICmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "ui",
 		Short: "启动本地 Web 控制台（向导部署 / 状态 / 日志）",
-		Long:  "默认监听 127.0.0.1:9527，前端已嵌入二进制。适合向日葵/ToDesk 远程桌面场景。",
+		Long:  "Linux 默认监听 0.0.0.0:9527（可用服务器 IP 访问）；Windows 默认 127.0.0.1:9527。",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ui.EnsureSitePathExists(flagSitePath)
 			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -26,7 +26,7 @@ func newUICmd() *cobra.Command {
 			return ui.Start(ctx, ui.Options{Listen: listen, SitePath: flagSitePath})
 		},
 	}
-	c.Flags().StringVar(&listen, "listen", "127.0.0.1:9527", "监听地址")
+	c.Flags().StringVar(&listen, "listen", ui.DefaultListen(), "监听地址，如 0.0.0.0:9527 或 127.0.0.1:9527")
 	return c
 }
 

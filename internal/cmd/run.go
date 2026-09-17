@@ -8,6 +8,8 @@ import (
 	"github.com/wpg/wpgctl/internal/config"
 	"github.com/wpg/wpgctl/internal/db"
 	"github.com/wpg/wpgctl/internal/deploy"
+	fw "github.com/wpg/wpgctl/internal/firewall"
+	"github.com/wpg/wpgctl/internal/moduledeploy"
 	"github.com/wpg/wpgctl/internal/fetch"
 	"github.com/wpg/wpgctl/internal/initenv"
 	"github.com/wpg/wpgctl/internal/nacos"
@@ -18,13 +20,14 @@ import (
 	"github.com/wpg/wpgctl/internal/util"
 )
 
-func runInit(site *config.SiteConfig, mf *config.Manifest, basePkg string, localOnly bool) (*initenv.Result, error) {
+func runInit(site *config.SiteConfig, mf *config.Manifest, basePkg, dockerPkg string, localOnly bool) (*initenv.Result, error) {
 	return initenv.Run(initenv.Options{
-		Site:        site,
-		Manifest:    mf,
-		BasePackage: basePkg,
-		LocalOnly:   localOnly,
-		SitePath:    flagSitePath,
+		Site:          site,
+		Manifest:      mf,
+		BasePackage:   basePkg,
+		DockerPackage: dockerPkg,
+		LocalOnly:     localOnly,
+		SitePath:      flagSitePath,
 	})
 }
 
@@ -108,6 +111,28 @@ func runNacosImport(sitePath, configDir string) error {
 	return err
 }
 
+func runFirewallOpen(sitePath, manifestPath string) error {
+	site, err := config.LoadSite(sitePath)
+	if err != nil {
+		return err
+	}
+	var mf *config.Manifest
+	if manifestPath != "" {
+		mf, err = config.LoadManifest(manifestPath)
+		if err != nil {
+			return err
+		}
+	}
+	ports := moduledeploy.PortsForSite(site, mf)
+	util.Infof("将放行 %d 个 TCP 端口…", len(ports))
+	res, err := fw.OpenPorts(ports)
+	if res != nil {
+		util.Infof("防火墙: %s，新开 %d，已有 %d，失败 %d",
+			res.Firewall, len(res.Opened), len(res.Skipped), len(res.Failed))
+	}
+	return err
+}
+
 func runUpgrade(sitePath, patchDir string, yes bool) error {
 	site, err := config.LoadSite(sitePath)
 	if err != nil {
@@ -157,4 +182,34 @@ func runPack(kind, version, manifest, output string, services []string, baseRele
 		Services: services, BaseRelease: baseRelease, WorkDir: workDir, VolumeSizeGB: volumeSizeGB,
 	})
 	return err
+}
+
+func runPackScan(dir, out, kind, version, arch string, write bool) error {
+	res, err := pack.ScanDir(pack.ScanOptions{
+		Dir: dir, Kind: kind, Version: version, Arch: arch,
+	})
+	if err != nil {
+		return err
+	}
+	for _, w := range res.Warnings {
+		util.Warnf("%s", w)
+	}
+	util.Infof("扫描到 %d 个镜像", len(res.Images))
+	for _, img := range res.Images {
+		util.Infof("  L%d  %-16s  %s", img.Layer, img.Name, img.Image)
+	}
+
+	outPath := out
+	if write && outPath == "" {
+		outPath = filepath.Join(dir, "manifest.yaml")
+	}
+	if outPath != "" {
+		if err := pack.WriteManifest(outPath, res.YAML); err != nil {
+			return err
+		}
+		util.Successf("已写入 %s", outPath)
+		return nil
+	}
+	fmt.Print(res.YAML)
+	return nil
 }

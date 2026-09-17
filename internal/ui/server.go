@@ -1,6 +1,6 @@
 // Package ui 提供本地 Web 控制台（方案 §3.7）：向导部署、状态、日志流。
 //
-// 默认监听 127.0.0.1:9527，适配向日葵/ToDesk 远程桌面场景；
+// Linux 默认监听 0.0.0.0:9527（可用服务器 IP 访问）；Windows 默认 127.0.0.1:9527。
 // 前端产物通过 go:embed 打进单二进制。
 package ui
 
@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -22,13 +23,13 @@ import (
 	"github.com/wpg/wpgctl/internal/initenv"
 	"github.com/wpg/wpgctl/internal/precheck"
 	"github.com/wpg/wpgctl/internal/state"
+	"github.com/wpg/wpgctl/internal/status"
 	"github.com/wpg/wpgctl/internal/util"
-	"github.com/wpg/wpgctl/internal/version"
 )
 
 // Options 控制台启动选项。
 type Options struct {
-	Listen   string // 默认 127.0.0.1:9527
+	Listen   string // 默认见 DefaultListen()
 	SitePath string
 	OpenHint bool
 }
@@ -60,7 +61,7 @@ type utilWriter struct{}
 // Start 启动控制台并阻塞直到上下文取消或服务退出。
 func Start(ctx context.Context, opts Options) error {
 	if opts.Listen == "" {
-		opts.Listen = "127.0.0.1:9527"
+		opts.Listen = DefaultListen()
 	}
 	if opts.SitePath == "" {
 		opts.SitePath = "site.yaml"
@@ -74,8 +75,7 @@ func Start(ctx context.Context, opts Options) error {
 	s.routes()
 
 	srv := &http.Server{Addr: opts.Listen, Handler: s.mux}
-	util.Successf("Web 控制台已启动: http://%s", opts.Listen)
-	util.Infof("适配向日葵/ToDesk：远程桌面打开浏览器访问上述地址即可")
+	printAccessHints(opts.Listen)
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -98,10 +98,34 @@ func Start(ctx context.Context, opts Options) error {
 
 func (s *Server) routes() {
 	s.mux.HandleFunc("/api/health", s.handleHealth)
+	s.mux.HandleFunc("/api/hostinfo", s.handleHostInfo)
+	s.mux.HandleFunc("/api/settings", s.handleSettings)
 	s.mux.HandleFunc("/api/site", s.handleSite)
+	s.mux.HandleFunc("/api/site/form", s.handleSiteForm)
+	s.mux.HandleFunc("/api/fs", s.handleFS)
+	s.mux.HandleFunc("/api/fs/text", s.handleFSText)
+	s.mux.HandleFunc("/api/fs/expand", s.handleFSExpand)
+	s.mux.HandleFunc("/api/packages", s.handlePackages)
+	s.mux.HandleFunc("/api/packages/scan", s.handlePackageScan)
+	s.mux.HandleFunc("/api/confirm-summary", s.handleConfirmSummary)
+	s.mux.HandleFunc("/api/report", s.handleReport)
+	s.mux.HandleFunc("/api/diag", s.handleDiagDownload)
+	s.mux.HandleFunc("/api/deliveries/export", s.handleDeliveryExport)
 	s.mux.HandleFunc("/api/precheck", s.handlePrecheck)
 	s.mux.HandleFunc("/api/init", s.handleInit)
 	s.mux.HandleFunc("/api/deploy", s.handleDeploy)
+	s.mux.HandleFunc("/api/module/catalog", s.handleModuleCatalog)
+	s.mux.HandleFunc("/api/module/deploy", s.handleModuleDeploy)
+	s.mux.HandleFunc("/api/module/patch-env", s.handleModulePatchEnv)
+	s.mux.HandleFunc("/api/nginx/patch", s.handleNginxPatch)
+	s.mux.HandleFunc("/api/nacos/import", s.handleNacosImport)
+	s.mux.HandleFunc("/api/firewall/ports", s.handleFirewallPorts)
+	s.mux.HandleFunc("/api/firewall/start", s.handleFirewallStart)
+	s.mux.HandleFunc("/api/preview", s.handlePreview)
+	s.mux.HandleFunc("/api/upgrade", s.handleUpgrade)
+	s.mux.HandleFunc("/api/rollback", s.handleRollback)
+	s.mux.HandleFunc("/api/fetch", s.handleFetch)
+	s.mux.HandleFunc("/api/latest", s.handleLatestDeploy)
 	s.mux.HandleFunc("/api/status", s.handleStatus)
 	s.mux.HandleFunc("/api/deployments", s.handleDeployments)
 	s.mux.HandleFunc("/api/jobs/", s.handleJob)
@@ -145,27 +169,138 @@ func (s *Server) writeJSON(w http.ResponseWriter, code int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleSite(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		s.getSite(w)
+	case http.MethodPut, http.MethodPost:
+		s.saveSite(w, r)
+	default:
+		http.Error(w, "method not allowed", 405)
+	}
+}
+
+func (s *Server) getSite(w http.ResponseWriter) {
+	raw, err := os.ReadFile(s.opts.SitePath)
+	if err != nil {
+		// 文件不存在时返回示例，方便网页新建
+		example := `# site.yaml — 在网页中编辑后保存即可
+site:
+  name: 示例水厂
+  code: plant-demo
+nodes:
+  - name: app-node
+    ip: 127.0.0.1
+    ssh: { user: root, port: 22 }
+    roles: [middleware, platform]
+profiles: [platform, waterwork, monitor]
+middleware:
+  nacos: { host: 127.0.0.1, port: 8848, namespace: intergrate, username: nacos, password: "wpg@nice#LKsalk98" }
+  mysql: { host: 127.0.0.1, port: 3306, user: wpg, password: "DmJme(ZFl9txW@2P" }
+  pgsql: { host: 127.0.0.1, port: 5433, user: wpg, password: "t7u!m0Wpyu7EfbVN" }
+  redis: { host: 127.0.0.1, port: 6377, password: "SJ(Qu%(kfXQBjxyT" }
+  kafka: { host: 127.0.0.1, port: 9092 }
+paths:
+  workspace: /workspace/waterwork
+  nginxHtml: /workspace/middleware/nginx/html
+  waterwork: /workspace/waterwork-4.1.1
+  intelligentModel: /workspace/wpg-intelligent-model-4.1.2
+`
+		s.writeJSON(w, 200, map[string]any{
+			"path":    s.opts.SitePath,
+			"exists":  false,
+			"yaml":    example,
+			"parsed":  nil,
+			"message": "site.yaml 尚不存在，已提供模板，保存后将创建",
+		})
+		return
+	}
+
+	cfg, err := config.LoadSite(s.opts.SitePath)
+	var parsed any
+	if err == nil {
+		safe := *cfg
+		// 编辑用 raw yaml（含真实密码）；parsed 仅作摘要，密码脱敏
+		safe.Middleware.Nacos.Password = mask(safe.Middleware.Nacos.Password)
+		safe.Middleware.MySQL.Password = mask(safe.Middleware.MySQL.Password)
+		safe.Middleware.Redis.Password = mask(safe.Middleware.Redis.Password)
+		safe.Middleware.PgSQL.Password = mask(safe.Middleware.PgSQL.Password)
+		parsed = safe
+	}
 	s.writeJSON(w, 200, map[string]any{
-		"ok":      true,
-		"version": version.Version,
-		"time":    time.Now().Format(time.RFC3339),
+		"path":   s.opts.SitePath,
+		"exists": true,
+		"yaml":   string(raw),
+		"parsed": parsed,
+		"error":  errString(err),
 	})
 }
 
-func (s *Server) handleSite(w http.ResponseWriter, r *http.Request) {
-	cfg, err := config.LoadSite(s.opts.SitePath)
+func (s *Server) saveSite(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		YAML string `json:"yaml"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		s.writeJSON(w, 400, map[string]string{"error": "请求体无效"})
+		return
+	}
+	if strings.TrimSpace(body.YAML) == "" {
+		s.writeJSON(w, 400, map[string]string{"error": "yaml 不能为空"})
+		return
+	}
+
+	// 先写临时文件再校验，避免破坏原文件
+	dir := filepath.Dir(s.opts.SitePath)
+	_ = os.MkdirAll(dir, 0o755)
+	tmp := s.opts.SitePath + ".tmp"
+	if err := os.WriteFile(tmp, []byte(body.YAML), 0o644); err != nil {
+		s.writeJSON(w, 500, map[string]string{"error": "写入失败: " + err.Error()})
+		return
+	}
+	if _, err := config.LoadSite(tmp); err != nil {
+		_ = os.Remove(tmp)
+		s.writeJSON(w, 400, map[string]string{"error": "校验失败: " + err.Error()})
+		return
+	}
+	if err := os.Rename(tmp, s.opts.SitePath); err != nil {
+		// Windows 上目标存在时 rename 可能失败，改为覆盖写
+		if err2 := os.WriteFile(s.opts.SitePath, []byte(body.YAML), 0o644); err2 != nil {
+			s.writeJSON(w, 500, map[string]string{"error": "保存失败: " + err2.Error()})
+			return
+		}
+		_ = os.Remove(tmp)
+	}
+	cfg, _ := config.LoadSite(s.opts.SitePath)
+	s.writeJSON(w, 200, map[string]any{
+		"ok":   true,
+		"path": s.opts.SitePath,
+		"site": cfg.Site,
+	})
+}
+
+func (s *Server) handleFS(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+	path := r.URL.Query().Get("path")
+	mode := r.URL.Query().Get("mode")
+	if mode == "" {
+		mode = "dir"
+	}
+	res, err := listFS(path, mode)
 	if err != nil {
 		s.writeJSON(w, 400, map[string]string{"error": err.Error()})
 		return
 	}
-	// 脱敏
-	safe := *cfg
-	safe.Middleware.Nacos.Password = mask(safe.Middleware.Nacos.Password)
-	safe.Middleware.MySQL.Password = mask(safe.Middleware.MySQL.Password)
-	safe.Middleware.Redis.Password = mask(safe.Middleware.Redis.Password)
-	safe.Middleware.PgSQL.Password = mask(safe.Middleware.PgSQL.Password)
-	s.writeJSON(w, 200, safe)
+	s.writeJSON(w, 200, res)
+}
+
+func errString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 func mask(s string) string {
@@ -222,9 +357,12 @@ func (s *Server) handleInit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Base     string `json:"base"`
-		Manifest string `json:"manifest"`
-		Local    bool   `json:"local"`
+		Base          string `json:"base"`
+		DockerPackage string `json:"dockerPackage"`
+		Manifest      string `json:"manifest"`
+		Local         bool   `json:"local"`
+		SSHPassword   string `json:"sshPassword"`
+		SSHKeyPath    string `json:"sshKeyPath"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&body)
 
@@ -236,13 +374,18 @@ func (s *Server) handleInit(w http.ResponseWriter, r *http.Request) {
 			s.failJob(job, err.Error())
 			return
 		}
+		if len(site.Nodes) > 1 && !body.Local {
+			s.appendLog(job, fmt.Sprintf("多机模式：本机 init 后将 SSH 分发到 %d 台从机（目录/防火墙）", len(site.Nodes)-1))
+		}
 		var mf *config.Manifest
 		if body.Manifest != "" {
 			mf, _ = config.LoadManifest(body.Manifest)
 		}
 		res, err := initenv.Run(initenv.Options{
-			Site: site, Manifest: mf, BasePackage: body.Base,
+			Site: site, Manifest: mf,
+			BasePackage: body.Base, DockerPackage: body.DockerPackage,
 			LocalOnly: body.Local, SitePath: s.opts.SitePath,
+			SSHPassword: body.SSHPassword, SSHKeyPath: body.SSHKeyPath,
 		})
 		if err != nil {
 			job.Result = res
@@ -250,6 +393,18 @@ func (s *Server) handleInit(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		job.Result = res
+		if res != nil && res.DockerVersion != "" {
+			s.appendLog(job, "Docker 版本: "+res.DockerVersion)
+		}
+		if res != nil && len(res.NodeResults) > 0 {
+			for _, nr := range res.NodeResults {
+				st := "OK"
+				if !nr.OK {
+					st = "FAIL"
+				}
+				s.appendLog(job, fmt.Sprintf("节点 %s (%s): %s — %s", nr.Name, nr.IP, st, nr.Message))
+			}
+		}
 		s.okJob(job, "初始化完成")
 	}()
 	s.writeJSON(w, 202, job)
@@ -261,8 +416,10 @@ func (s *Server) handleDeploy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Package string `json:"package"`
-		DryRun  bool   `json:"dryRun"`
+		Package  string `json:"package"`
+		DryRun   bool   `json:"dryRun"`
+		Operator string `json:"operator"`
+		Scenario string `json:"scenario"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&body)
 	if body.Package == "" {
@@ -285,6 +442,13 @@ func (s *Server) handleDeploy(w http.ResponseWriter, r *http.Request) {
 		res, err := deploy.Run(deploy.Options{
 			Site: site, Manifest: mf, PackageDir: body.Package,
 			SitePath: s.opts.SitePath, DryRun: body.DryRun,
+			Operator: body.Operator, Scenario: body.Scenario,
+			OnProgress: func(layer int, message string, smoke []deploy.SmokeEntry) {
+				s.appendLog(job, message)
+				s.mu.Lock()
+				job.Result = map[string]any{"layer": layer, "smoke": smoke}
+				s.mu.Unlock()
+			},
 		})
 		job.Result = res
 		if err != nil {
@@ -297,18 +461,20 @@ func (s *Server) handleDeploy(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
-	site, err := config.LoadSite(s.opts.SitePath)
 	composeDir := ""
-	if err == nil {
+	if site, err := config.LoadSite(s.opts.SitePath); err == nil {
 		composeDir = filepath.Join(site.Paths.Workspace, "rendered")
 	}
-	d := dockerx.New()
-	list, err2 := d.ComposePs(composeDir, "")
-	if err2 != nil {
-		s.writeJSON(w, 200, map[string]any{"services": []any{}, "warning": err2.Error()})
+	res, err := status.QueryServices(composeDir)
+	if err != nil {
+		s.writeJSON(w, 200, map[string]any{"services": []any{}, "warning": err.Error()})
 		return
 	}
-	s.writeJSON(w, 200, map[string]any{"services": list})
+	s.writeJSON(w, 200, map[string]any{
+		"services": res.Services,
+		"source":   res.Source,
+		"warning":  res.Warning,
+	})
 }
 
 func (s *Server) handleDeployments(w http.ResponseWriter, r *http.Request) {

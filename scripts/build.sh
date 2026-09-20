@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # wpgctl 构建脚本（Linux / macOS / Git Bash）
 # 用法：
-#   ./scripts/build.sh                  # 默认编 Linux amd64
+#   ./scripts/build.sh                  # 默认：先编前端再打 Linux amd64
+#   SKIP_UI=1 ./scripts/build.sh        # 只编 Go，沿用已有 dist
 #   ./scripts/build.sh release          # 前端 + linux amd64 + arm64
 #   ./scripts/build.sh build            # 本机平台
 #   ./scripts/build.sh ui-build
@@ -42,9 +43,11 @@ case "${TARGET}" in
     go_build "$(go env GOOS)" "$(go env GOARCH)" "${APP}"
     ;;
   build-linux)
+    if [[ "${SKIP_UI:-}" != "1" ]]; then ui_build; fi
     go_build linux amd64 "${APP}-linux-amd64"
     ;;
   build-arm64)
+    if [[ "${SKIP_UI:-}" != "1" ]]; then ui_build; fi
     go_build linux arm64 "${APP}-linux-arm64"
     ;;
   release)

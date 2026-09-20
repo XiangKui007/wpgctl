@@ -1,0 +1,438 @@
+/** 通用面板、表单、表格、按钮与对话框。 */
+/* —— Panels —— */
+.panel {
+  max-width: var(--page);
+  margin: 0 auto;
+  padding: 1.5rem 1.5rem 3rem;
+  width: 100%;
+  animation: fade-in 0.25s ease both;
+}
+
+.panel-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 1.15rem;
+}
+
+.panel-head h2 {
+  margin: 0 0 0.3rem;
+  font-family: var(--font-display);
+  font-size: 1.65rem;
+  letter-spacing: -0.02em;
+}
+
+.panel-wizard .panel-head h2 {
+  color: var(--water-deep);
+}
+
+.panel-wizard .surface {
+  border-color: color-mix(in srgb, var(--water) 18%, var(--line));
+  box-shadow: 0 14px 36px rgba(8, 90, 82, 0.08);
+}
+
+.panel-head p {
+  margin: 0;
+  color: var(--ink-soft);
+}
+
+.surface {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 1.25rem 1.35rem;
+  box-shadow: var(--shadow);
+}
+
+.surface .surface {
+  background: var(--paper);
+  border-radius: 8px;
+  margin-top: 1rem;
+  padding: 1rem 1.1rem;
+}
+
+.wizard-alert {
+  margin: 0 0 1rem;
+  padding: 0.65rem 0.85rem;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--line));
+  background: color-mix(in srgb, var(--danger) 8%, var(--surface));
+  color: var(--danger);
+  font-size: 0.92rem;
+}
+
+.steps {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
+  gap: 0.45rem;
+  margin-bottom: 1.15rem;
+}
+
+.step {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.55rem 0.65rem;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  cursor: pointer;
+  user-select: none;
+  transition: border-color 0.15s ease, background 0.15s ease, opacity 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+}
+
+.step:not(.locked):not(.active):hover {
+  border-color: color-mix(in srgb, var(--water) 45%, var(--line));
+  background: var(--water-soft);
+  transform: translateY(-1px);
+}
+
+.step.locked {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
+.step.active {
+  background: linear-gradient(165deg, #1ac4b0 0%, var(--water) 58%, var(--water-deep) 100%);
+  border-color: transparent;
+  box-shadow: 0 8px 22px rgba(12, 155, 138, 0.32);
+}
+
+.step.active .title {
+  color: #fff;
+  font-weight: 700;
+}
+
+.step.active .idx {
+  background: #fff;
+  color: var(--water-deep);
+}
+
+.step.done {
+  border-color: color-mix(in srgb, var(--ok) 40%, var(--line));
+}
+
+.step.done:not(.active) {
+  background: color-mix(in srgb, var(--ok) 10%, var(--surface));
+}
+
+.step.done:not(.active) .idx {
+  background: var(--ok);
+  color: #fff;
+}
+
+.step .idx {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 1.85rem;
+  height: 1.85rem;
+  border-radius: 8px;
+  background: var(--paper);
+  color: var(--ink-soft);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.step .title {
+  margin: 0;
+  font-weight: 600;
+  font-size: 0.82rem;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.field-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.1rem 1.25rem;
+  margin-bottom: 1.15rem;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.field.full {
+  grid-column: 1 / -1;
+}
+
+.field label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+/* 必填项红星：标在标签文字前，与校验失败提示对应。 */
+.req::before {
+  content: "*";
+  margin-right: 0.18em;
+  color: var(--danger);
+  font-weight: 800;
+}
+
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.checkbox-label input[type='checkbox'] {
+  width: 1rem;
+  height: 1rem;
+  margin: 0;
+  cursor: pointer;
+}
+
+.hint-banner {
+  margin: 0 0 1rem;
+  padding: 0.7rem 0.9rem;
+  color: var(--ink-soft);
+  line-height: 1.55;
+  font-size: 0.9rem;
+  background: #f7fbfa;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.seg {
+  display: inline-flex;
+  gap: 0.25rem;
+  padding: 0.2rem;
+  background: var(--paper);
+  border-radius: 8px;
+}
+
+.seg button {
+  border: 0;
+  background: transparent;
+  color: #8a9ca3;
+  padding: 0.4rem 0.85rem;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.88rem;
+  font-weight: 400;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.seg button.on {
+  background: #fff;
+  color: var(--water-deep);
+  font-weight: 700;
+  box-shadow: 0 1px 2px rgba(21, 36, 40, 0.06);
+}
+
+.module-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 0.55rem;
+}
+
+.module-card {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #fff;
+  cursor: pointer;
+  font-size: 0.92rem;
+}
+
+.module-card input {
+  accent-color: var(--water);
+}
+
+.module-card.selected {
+  border-color: var(--water);
+  background: var(--water-soft);
+}
+
+.check-list {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.check-item {
+  display: grid;
+  grid-template-columns: 72px 1fr;
+  gap: 0.75rem;
+  align-items: start;
+  padding: 0.85rem 0.95rem;
+  background: #fbfcfc;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.12rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  background: #eef3f2;
+  color: var(--ink-soft);
+  line-height: 1.4;
+}
+
+.badge.green {
+  color: #047857;
+  background: #d1fae5;
+}
+.badge.yellow {
+  color: #b45309;
+  background: #fef3c7;
+}
+.badge.red {
+  color: #b91c1c;
+  background: #fee2e2;
+}
+
+.log-box {
+  margin-top: 1rem;
+  background: #152428;
+  color: #c9dbd7;
+  font-family: ui-monospace, "Cascadia Code", "Consolas", monospace;
+  font-size: 0.82rem;
+  line-height: 1.55;
+  padding: 1.1rem;
+  border-radius: 10px;
+  max-height: 280px;
+  overflow: auto;
+}
+
+.log-box pre {
+  margin: 0;
+  white-space: pre-wrap;
+  font: inherit;
+}
+
+.log-box .err { color: #f0a8a8; }
+.log-box .ok { color: #7dceb3; }
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.table th,
+.table td {
+  text-align: left;
+  padding: 0.7rem 0.85rem;
+  border-bottom: 1px solid var(--line);
+  font-size: 0.9rem;
+}
+
+.table tbody tr:nth-child(even) {
+  background: #f8fbfb;
+}
+
+.table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.table th {
+  color: var(--ink-soft);
+  font-weight: 500;
+  font-size: 0.78rem;
+}
+
+.pulse {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--water-glow);
+  margin-right: 0.4rem;
+}
+
+.muted { color: var(--ink-soft); }
+.actions { display: flex; gap: 0.65rem; flex-wrap: wrap; margin-top: 1.15rem; }
+
+.actions.busy .btn:not(.btn-active):not(.btn-primary) {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+.btn-active {
+  box-shadow: 0 0 0 2px var(--water-soft), 0 0 0 3px var(--water);
+  animation: pulse-active 1.2s ease-in-out infinite;
+}
+
+@keyframes pulse-active {
+  0%, 100% { box-shadow: 0 0 0 2px var(--water-soft), 0 0 0 3px var(--water); }
+  50% { box-shadow: 0 0 0 4px rgba(12, 155, 138, 0.18), 0 0 0 5px var(--water); }
+}
+
+.wizard-step-purpose {
+  position: relative;
+  background: linear-gradient(100deg, #c8f6ee 0%, #e7faf6 62%, #fff 100%);
+  border: 1px solid color-mix(in srgb, var(--water) 28%, var(--line));
+  border-left: 5px solid var(--water);
+  padding: 0.85rem 1rem 0.85rem 1.05rem;
+  margin: 0 0 1rem;
+  border-radius: 0 12px 12px 0;
+  font-size: 0.94rem;
+  line-height: 1.55;
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.wizard-step-purpose::before {
+  content: "本步要点";
+  display: inline-block;
+  margin: 0 0.55rem 0.15rem 0;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  background: var(--water);
+  color: #fff;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  vertical-align: 0.12em;
+}
+
+.file-editor-dialog .file-editor-path {
+  margin: 0 0 0.65rem;
+  font-size: 0.82rem;
+  word-break: break-all;
+}
+
+.file-editor-dialog .file-editor-body {
+  min-height: 12rem;
+}
+
+.file-editor-dialog .file-editor-msg {
+  margin: 0.55rem 0 0;
+  font-size: 0.85rem;
+}
+
+.file-editor-dialog .file-editor-hint {
+  margin-right: auto;
+  font-size: 0.8rem;
+}
+
+.file-editor-dialog .el-dialog__footer {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}

@@ -55,10 +55,10 @@ func newPrecheckCmd() *cobra.Command {
 
 func newInitCmd() *cobra.Command {
 	var (
-		basePkg       string
-		dockerPkg     string
-		manifestPath  string
-		localOnly     bool
+		basePkg      string
+		dockerPkg    string
+		manifestPath string
+		localOnly    bool
 	)
 	c := &cobra.Command{
 		Use:   "init",
@@ -119,8 +119,8 @@ func newFetchCmd() *cobra.Command {
 
 func newDeployCmd() *cobra.Command {
 	var (
-		packageDir string
-		dryRun     bool
+		packageDir  string
+		dryRun      bool
 		concurrency int
 	)
 	c := &cobra.Command{
@@ -159,19 +159,28 @@ func newDBCmd() *cobra.Command {
 	dbCmd := &cobra.Command{Use: "db", Short: "数据库相关操作"}
 	var (
 		packageDir string
+		sqlFiles   []string
+		sqlDriver  string
+		sqlDB      string
 		dryRun     bool
 	)
 	apply := &cobra.Command{
 		Use:   "apply",
-		Short: "执行待执行 SQL 并写入台账",
+		Short: "执行 SQL（包内 sql/ 台账，或 --file 现场自选）",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(sqlFiles) > 0 {
+				return runDBApplyFiles(flagSitePath, sqlFiles, sqlDriver, sqlDB, dryRun)
+			}
 			if packageDir == "" {
-				return fmt.Errorf("请指定 --package")
+				return fmt.Errorf("请指定 --package 或 --file")
 			}
 			return runDBApply(flagSitePath, packageDir, dryRun)
 		},
 	}
 	apply.Flags().StringVar(&packageDir, "package", "", "含 sql/ 的包目录")
+	apply.Flags().StringArrayVar(&sqlFiles, "file", nil, "现场自选 .sql（可重复；指定后不再扫描 --package）")
+	apply.Flags().StringVar(&sqlDriver, "driver", "", "mysql 或 pgsql（空则按 site.yaml 推断）")
+	apply.Flags().StringVar(&sqlDB, "database", "", "目标库名；pgsql 默认 postgres")
 	apply.Flags().BoolVar(&dryRun, "dry-run", false, "仅列出将执行的脚本")
 	dbCmd.AddCommand(apply)
 	return dbCmd
@@ -197,18 +206,22 @@ func newFirewallCmd() *cobra.Command {
 
 func newNacosCmd() *cobra.Command {
 	nacosCmd := &cobra.Command{Use: "nacos", Short: "Nacos 配置操作"}
-	var configDir string
+	var (
+		configDir  string
+		configZips []string
+	)
 	imp := &cobra.Command{
 		Use:   "import",
-		Short: "导入/更新 Nacos 配置（含备份与 diff）",
+		Short: "导入 Nacos 配置（nacos*.zip 直接上传，或目录逐文件发布）",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if configDir == "" {
-				return fmt.Errorf("请指定 --config 已渲染的 nacos 目录")
+			if len(configZips) == 0 && configDir == "" {
+				return fmt.Errorf("请指定 --zip nacos*.zip（可重复）或 --config 目录")
 			}
-			return runNacosImport(flagSitePath, configDir)
+			return runNacosImport(flagSitePath, configDir, configZips)
 		},
 	}
-	imp.Flags().StringVar(&configDir, "config", "", "渲染后的 nacos 配置目录")
+	imp.Flags().StringArrayVar(&configZips, "zip", nil, "nacos 导出的 zip（文件名以 nacos 开头，直接上传不解压，可重复）")
+	imp.Flags().StringVar(&configDir, "config", "", "渲染后的 nacos 配置目录（兼容旧流程）")
 	nacosCmd.AddCommand(imp)
 	return nacosCmd
 }

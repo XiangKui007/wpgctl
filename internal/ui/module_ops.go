@@ -8,11 +8,50 @@ import (
 	"strings"
 
 	"github.com/wpg/wpgctl/internal/config"
-	"github.com/wpg/wpgctl/internal/util"
 	fw "github.com/wpg/wpgctl/internal/firewall"
 	"github.com/wpg/wpgctl/internal/moduledeploy"
 	"github.com/wpg/wpgctl/internal/nacos"
+	"github.com/wpg/wpgctl/internal/remotedeploy"
+	"github.com/wpg/wpgctl/internal/util"
 )
+
+func nacosZipsIf(enabled bool, zips []string) []string {
+	if !enabled {
+		return nil
+	}
+	var out []string
+	for _, z := range zips {
+		z = strings.TrimSpace(z)
+		if z != "" {
+			out = append(out, z)
+		}
+	}
+	return out
+}
+
+func (s *Server) importNacosAfterDeploy(job *Job, site *config.SiteConfig, zips []string, moduleName string) bool {
+	if len(zips) == 0 {
+		if strings.EqualFold(moduleName, "nacos") {
+			s.appendLog(job, "Nacos 已部署。请立刻选择 nacos*.zip 并点「导入配置」——未导入则后续平台、市政水厂会因拉不到配置而报错。")
+		}
+		return false
+	}
+	s.appendLog(job, fmt.Sprintf("等待 Nacos 可登录后上传导入 %d 个 zip（不解压）…", len(zips)))
+	for _, z := range zips {
+		s.appendLog(job, "  "+filepath.Base(z))
+	}
+	importRes, ierr := nacos.Run(nacos.Options{Site: site, ConfigZips: zips})
+	if ierr != nil {
+		s.appendLog(job, "WARN: Nacos 导入失败: "+ierr.Error())
+		s.appendLog(job, "请在 Nacos 行下方点「导入配置」重试。未导入则后续平台、市政水厂会报错。")
+		return false
+	}
+	if importRes != nil && len(importRes.Imported) > 0 {
+		s.appendLog(job, "已导入: "+strings.Join(importRes.Imported, ", "))
+	}
+	s.appendLog(job, "Nacos 配置导入完成")
+	return true
+}
 
 func (s *Server) handleModuleCatalog(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -26,22 +65,49 @@ func (s *Server) handleModuleCatalog(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleModulePath 解析套层包内的模块目录（middleware/middleware/nginx 等）。
+func (s *Server) handleModulePath(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+	root := strings.TrimSpace(r.URL.Query().Get("root"))
+	name := strings.TrimSpace(r.URL.Query().Get("name"))
+	if root == "" || name == "" {
+		s.writeJSON(w, 400, map[string]string{"error": "请提供 root 与 name"})
+		return
+	}
+	path := moduledeploy.ModulePath(root, name)
+	s.writeJSON(w, 200, map[string]any{
+		"root":   root,
+		"name":   name,
+		"path":   path,
+		"exists": util.DirExists(path),
+	})
+}
+
 func (s *Server) handleModuleDeploy(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", 405)
 		return
 	}
 	var body struct {
-		ModuleDir       string `json:"moduleDir"`
-		ModuleRoot      string `json:"moduleRoot"`
-		ModuleName      string `json:"moduleName"`
-		Expand          bool   `json:"expand"`
-		Load            bool   `json:"load"`
-		PatchEnv        bool   `json:"patchEnv"`
-		ComposeUp       bool   `json:"composeUp"`
-		ComposeBuild    bool   `json:"composeBuild"`
-		NacosConfigDir  string `json:"nacosConfigDir"`
-		AutoNacosImport bool   `json:"autoNacosImport"`
+		ModuleDir       string   `json:"moduleDir"`
+		ModuleRoot      string   `json:"moduleRoot"`
+		ModuleName      string   `json:"moduleName"`
+		Expand          bool     `json:"expand"`
+		Load            bool     `json:"load"`
+		PatchEnv        bool     `json:"patchEnv"`
+		ComposeUp       bool     `json:"composeUp"`
+		ComposeBuild    bool     `json:"composeBuild"`
+		NacosConfigZips []string `json:"nacosConfigZips"`
+		AutoNacosImport bool     `json:"autoNacosImport"`
+		// 多机：目标节点（site.yaml 中的 name 或 ip）；为空或为本机时在主控机本地执行
+		Node        string `json:"node"`
+		SSHPassword string `json:"sshPassword"`
+		SSHKeyPath  string `json:"sshKeyPath"`
+		SyncFiles   *bool  `json:"syncFiles"` // 目标机缺少模块目录时自动上传（默认 true）
+		ForceSync   bool   `json:"forceSync"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&body)
 	moduleDir := strings.TrimSpace(body.ModuleDir)
@@ -63,6 +129,8 @@ func (s *Server) handleModuleDeploy(w http.ResponseWriter, r *http.Request) {
 	} else if !body.Expand && !body.Load && !body.PatchEnv && !body.ComposeUp {
 		body.Expand, body.Load, body.ComposeUp = true, true, true
 	}
+	syncFiles := body.SyncFiles == nil || *body.SyncFiles
+	nacosZips := nacosZipsIf(body.AutoNacosImport && strings.EqualFold(body.ModuleName, "nacos"), body.NacosConfigZips)
 
 	job := s.newJob("module-deploy")
 	go func() {
@@ -72,8 +140,41 @@ func (s *Server) handleModuleDeploy(w http.ResponseWriter, r *http.Request) {
 			s.failJob(job, err.Error())
 			return
 		}
+
+		// 多机：目标为其他机器时走 SSH 分发；zip 导入在主控机对 Nacos HTTP 上传（不解压）
+		if target, ok := remotedeploy.FindNode(site, body.Node); ok && remotedeploy.IsRemote(target) {
+			res, rerr := remotedeploy.RunModule(
+				remotedeploy.Target{Node: target, SSHPassword: body.SSHPassword, SSHKeyPath: body.SSHKeyPath, SitePath: s.opts.SitePath},
+				remotedeploy.ModuleOptions{
+					ModuleDir:    moduleDir,
+					Expand:       body.Expand,
+					Load:         body.Load,
+					PatchEnv:     body.PatchEnv,
+					ComposeUp:    body.ComposeUp,
+					ComposeBuild: body.ComposeBuild,
+					SyncFiles:    syncFiles,
+					ForceSync:    body.ForceSync,
+				},
+				func(line string) { s.appendLog(job, line) },
+			)
+			job.Result = res
+			if rerr != nil {
+				s.failJob(job, rerr.Error())
+				return
+			}
+			imported := s.importNacosAfterDeploy(job, site, nacosZips, body.ModuleName)
+			if imported {
+				s.okJob(job, fmt.Sprintf("模块已在 %s (%s) 部署并导入 Nacos 配置", target.Name, target.IP))
+				return
+			}
+			s.okJob(job, fmt.Sprintf("模块已在 %s (%s) 部署完成", target.Name, target.IP))
+			return
+		}
+		if body.Node != "" {
+			s.appendLog(job, "目标机器为本机，直接在主控机执行")
+		}
 		if body.ComposeBuild {
-			s.appendLog(job, "模式: compose up -d --build（从 jar/Dockerfile 构建，跳过 tar load）")
+			s.appendLog(job, "模式: compose up -d --build（先 load java8.tar 等基础镜像，再从 jar/Dockerfile 构建）")
 		}
 		res, err := moduledeploy.Run(moduledeploy.Options{
 			ModuleDir:    moduleDir,
@@ -99,16 +200,9 @@ func (s *Server) handleModuleDeploy(w http.ResponseWriter, r *http.Request) {
 				s.appendLog(job, "  SQL: "+q)
 			}
 		}
-		if body.AutoNacosImport && strings.EqualFold(body.ModuleName, "nacos") && body.NacosConfigDir != "" {
-			s.appendLog(job, "Nacos 已启动，开始导入配置…")
-			importRes, ierr := nacos.Run(nacos.Options{Site: site, ConfigDir: body.NacosConfigDir})
-			job.Result = map[string]any{"deploy": res, "nacosImport": importRes}
-			if ierr != nil {
-				s.failJob(job, "Nacos 导入失败: "+ierr.Error())
-				return
-			}
-			s.appendLog(job, "Nacos 配置导入完成")
-			s.okJob(job, "模块部署 + Nacos 导入完成")
+		imported := s.importNacosAfterDeploy(job, site, nacosZips, body.ModuleName)
+		if imported {
+			s.okJob(job, "模块部署 + Nacos zip 导入完成")
 			return
 		}
 		s.okJob(job, "模块部署完成")
@@ -148,12 +242,19 @@ func (s *Server) handleNginxPatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		NginxDir   string `json:"nginxDir"`
-		GatewayIP  string `json:"gatewayIp"`
-		AppIP      string `json:"appIp"`
-		GraphIP    string `json:"graphIp"`
-		ExpandHTML bool   `json:"expandHtml"`
-		ComposeUp  bool   `json:"composeUp"`
+		NginxDir       string `json:"nginxDir"`
+		GatewayIP      string `json:"gatewayIp"`
+		AppIP          string `json:"appIp"`
+		GraphIP        string `json:"graphIp"`
+		ExpandHTML     bool   `json:"expandHtml"`
+		ComposeUp      bool   `json:"composeUp"`
+		SkipProxyPatch bool   `json:"skipProxyPatch"`
+		// 多机：目标节点与 SSH 凭据
+		Node        string `json:"node"`
+		SSHPassword string `json:"sshPassword"`
+		SSHKeyPath  string `json:"sshKeyPath"`
+		SyncFiles   *bool  `json:"syncFiles"`
+		ForceSync   bool   `json:"forceSync"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&body)
 	if body.NginxDir == "" {
@@ -166,7 +267,7 @@ func (s *Server) handleNginxPatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	gw := body.GatewayIP
-	if gw == "" && len(site.Nodes) > 0 {
+	if !body.SkipProxyPatch && gw == "" && len(site.Nodes) > 0 {
 		gw = site.Nodes[0].IP
 	}
 	layout := moduledeploy.ResolveNginxLayout(body.NginxDir)
@@ -175,16 +276,47 @@ func (s *Server) handleNginxPatch(w http.ResponseWriter, r *http.Request) {
 		moduleDir = filepath.Dir(filepath.Dir(body.NginxDir))
 		layout = moduledeploy.ResolveNginxLayout(moduleDir)
 	}
+	syncFiles := body.SyncFiles == nil || *body.SyncFiles
 
 	job := s.newJob("nginx-patch")
 	go func() {
+		if target, ok := remotedeploy.FindNode(site, body.Node); ok && remotedeploy.IsRemote(target) {
+			res, rerr := remotedeploy.RunNginx(
+				remotedeploy.Target{Node: target, SSHPassword: body.SSHPassword, SSHKeyPath: body.SSHKeyPath, SitePath: s.opts.SitePath},
+				remotedeploy.NginxOptions{
+					NginxDir:       moduleDir,
+					GatewayIP:      gw,
+					AppIP:          body.AppIP,
+					GraphIP:        body.GraphIP,
+					ExpandHTML:     body.ExpandHTML,
+					ComposeUp:      body.ComposeUp,
+					SkipProxyPatch: body.SkipProxyPatch,
+					SyncFiles:      syncFiles,
+					ForceSync:      body.ForceSync,
+				},
+				func(line string) { s.appendLog(job, line) },
+			)
+			job.Result = res
+			if rerr != nil {
+				s.failJob(job, rerr.Error())
+				return
+			}
+			s.okJob(job, fmt.Sprintf("Nginx 已在 %s (%s) 更新完成", target.Name, target.IP))
+			return
+		}
+		s.appendLog(job, "nginx 模块目录: "+moduleDir)
 		if body.ExpandHTML {
 			s.appendLog(job, "解压 nginx 模块 tar.zip / load 镜像 / 解压 html zip…")
 		}
-		s.appendLog(job, "更新 http-web-8877.conf，网关="+gw)
+		if body.SkipProxyPatch {
+			s.appendLog(job, "跳过 proxy_pass IP 同步，使用已保存的 conf")
+		} else {
+			s.appendLog(job, "更新 http-web-8877.conf，网关="+gw)
+		}
 		patchRes, err := moduledeploy.RunNginxPatch(moduledeploy.NginxPatchOptions{
 			Layout:         layout,
 			ExpandArchives: body.ExpandHTML,
+			SkipProxyPatch: body.SkipProxyPatch,
 			ProxyIPs: moduledeploy.NginxProxyIPs{
 				Gateway: gw,
 				App:     body.AppIP,
@@ -202,7 +334,7 @@ func (s *Server) handleNginxPatch(w http.ResponseWriter, r *http.Request) {
 		for _, n := range patchRes.ProxyNotes {
 			s.appendLog(job, "proxy_pass "+n)
 		}
-		if len(patchRes.ProxyNotes) == 0 {
+		if !body.SkipProxyPatch && len(patchRes.ProxyNotes) == 0 {
 			s.appendLog(job, "proxy_pass 无变更（可能已是目标 IP）")
 		}
 		job.Result = map[string]any{
@@ -212,7 +344,7 @@ func (s *Server) handleNginxPatch(w http.ResponseWriter, r *http.Request) {
 			"expand":  patchRes.ExpandHTML,
 			"compose": patchRes.Compose,
 		}
-		s.okJob(job, "Nginx 配置已更新")
+		s.okJob(job, "Nginx 部署完成")
 	}()
 	s.writeJSON(w, 202, job)
 }
@@ -320,17 +452,27 @@ func (s *Server) handleNacosImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		ConfigDir string `json:"configDir"`
+		ConfigZips []string `json:"configZips"`
+		ConfigDir  string   `json:"configDir"` // 兼容旧目录导入
 	}
 	_ = json.NewDecoder(r.Body).Decode(&body)
-	if body.ConfigDir == "" {
-		s.writeJSON(w, 400, map[string]string{"error": "configDir 不能为空"})
+	zips := nacosZipsIf(true, body.ConfigZips)
+	if len(zips) == 0 && strings.TrimSpace(body.ConfigDir) == "" {
+		s.writeJSON(w, 400, map[string]string{"error": "请选择至少一个 nacos*.zip（或提供 configDir）"})
 		return
 	}
 
 	job := s.newJob("nacos-import")
 	go func() {
-		s.appendLog(job, "导入 Nacos 配置: "+body.ConfigDir)
+		if len(zips) > 0 {
+			s.appendLog(job, fmt.Sprintf("上传导入 Nacos zip（不解压）共 %d 个", len(zips)))
+			for _, z := range zips {
+				s.appendLog(job, "  "+z)
+			}
+		}
+		if body.ConfigDir != "" {
+			s.appendLog(job, "导入 Nacos 配置目录: "+body.ConfigDir)
+		}
 		site, err := config.LoadSite(s.opts.SitePath)
 		if err != nil {
 			s.failJob(job, err.Error())
@@ -339,7 +481,8 @@ func (s *Server) handleNacosImport(w http.ResponseWriter, r *http.Request) {
 		s.appendLog(job, fmt.Sprintf("Nacos 目标: http://%s:%d namespace=%s user=%s",
 			site.Middleware.Nacos.Host, site.Middleware.Nacos.Port,
 			site.Middleware.Nacos.Namespace, site.Middleware.Nacos.Username))
-		res, err := nacos.Run(nacos.Options{Site: site, ConfigDir: body.ConfigDir})
+		s.appendLog(job, "等待 Nacos 控制台可登录后导入…")
+		res, err := nacos.Run(nacos.Options{Site: site, ConfigZips: zips, ConfigDir: body.ConfigDir})
 		if err != nil {
 			s.failJob(job, err.Error())
 			return

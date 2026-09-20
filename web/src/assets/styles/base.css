@@ -1,0 +1,80 @@
+/** 设计变量、页面底与壳。 */
+/* WPGCTL — 大气、简洁、留白 */
+
+:root {
+  --ink: #12333a;
+  --ink-soft: #4a6b72;
+  --paper: #eef8f6;
+  --surface: #ffffff;
+  --water: #0c9b8a;
+  --water-soft: #d5f5ef;
+  --water-deep: #08665c;
+  --water-glow: #1ad4be;
+  --accent: #f59e0b;
+  --accent-soft: #fff6de;
+  --line: rgba(8, 90, 82, 0.14);
+  --ok: #059669;
+  --warn: #d97706;
+  --danger: #dc2626;
+  --radius: 8px;
+  --shadow: 0 1px 2px rgba(8, 70, 64, 0.05), 0 10px 28px rgba(8, 70, 64, 0.07);
+  --font-display: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-body: "Segoe UI", "PingFang SC", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+  --page: 1160px;
+  --el-color-primary: #0c9b8a;
+  --el-color-primary-light-3: #3ab5a6;
+  --el-color-primary-light-5: #6bcdc2;
+  --el-color-primary-light-7: #9de0d8;
+  --el-color-primary-light-8: #c5efe9;
+  --el-color-primary-light-9: #e6faf6;
+  --el-color-primary-dark-2: #08665c;
+  --el-color-success: #059669;
+  --el-color-warning: #d97706;
+  --el-color-danger: #dc2626;
+  --el-border-radius-base: 8px;
+  --el-font-family: var(--font-body);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  margin: 0;
+  min-height: 100%;
+}
+
+body {
+  font-family: var(--font-body);
+  color: var(--ink);
+  background:
+    radial-gradient(820px 460px at 92% -8%, rgba(26, 212, 190, 0.28), transparent 58%),
+    radial-gradient(640px 380px at -8% 100%, rgba(12, 155, 138, 0.12), transparent 52%),
+    linear-gradient(180deg, #f4fcfa 0%, #e6f4f1 100%);
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.app-shell {
+  min-height: 100vh;
+  display: grid;
+  grid-template-rows: auto 1fr;
+}

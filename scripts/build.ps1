@@ -1,11 +1,17 @@
-# wpgctl build script (Windows PowerShell)
-# Usage (run from repo root):
+# wpgctl 构建脚本（Windows PowerShell）
+# 用法（仓库根目录）：
+#   .\scripts\build.cmd
+#     推荐：不受 ExecutionPolicy 拦截
 #   powershell -ExecutionPolicy Bypass -File .\scripts\build.ps1
+#     默认：先编前端再打 Linux amd64（现场包必须带上当前 Vue，否则仍是旧 embed）
 #   powershell -ExecutionPolicy Bypass -File .\scripts\build.ps1 -Target release
+#   powershell -ExecutionPolicy Bypass -File .\scripts\build.ps1 -SkipUi
+#     只编 Go，沿用 internal/ui/dist 里已有产物
 
 param(
     [ValidateSet('build', 'build-linux', 'build-arm64', 'ui-build', 'release', 'test')]
-    [string]$Target = 'build-linux'
+    [string]$Target = 'build-linux',
+    [switch]$SkipUi
 )
 
 $ErrorActionPreference = 'Stop'
@@ -104,9 +110,11 @@ switch ($Target) {
         Write-Host "   done: $out" -ForegroundColor Green
     }
     'build-linux' {
+        if (-not $SkipUi) { Invoke-UiBuild }
         Invoke-GoBuild -GoOs 'linux' -GoArch 'amd64' -OutName "${App}-linux-amd64"
     }
     'build-arm64' {
+        if (-not $SkipUi) { Invoke-UiBuild }
         Invoke-GoBuild -GoOs 'linux' -GoArch 'arm64' -OutName "${App}-linux-arm64"
     }
     'release' {

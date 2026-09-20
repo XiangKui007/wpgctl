@@ -18,9 +18,9 @@ type OpenOptions struct {
 
 // Status 防火墙类型与运行状态。
 type Status struct {
-	Tool    string `json:"tool"`    // firewalld | ufw | iptables | none
+	Tool    string `json:"tool"` // firewalld | ufw | iptables | none
 	Running bool   `json:"running"`
-	Detail  string `json:"detail"`  // running / inactive / not running ...
+	Detail  string `json:"detail"` // running / inactive / not running ...
 }
 
 // Result 放行结果。
@@ -157,7 +157,7 @@ func OpenPortsWithOptions(opts OpenOptions) (*Result, error) {
 
 	if st.Tool == "firewalld" {
 		res.Messages = append(res.Messages, "执行 firewall-cmd --reload …")
-		if out, err := exec.Command("firewall-cmd", "--reload").CombinedOutput(); err != nil {
+		if out, err := util.RunPrivileged("firewall-cmd", "--reload"); err != nil {
 			msg := strings.TrimSpace(string(out))
 			if msg == "" {
 				msg = err.Error()
@@ -172,35 +172,52 @@ func OpenPortsWithOptions(opts OpenOptions) (*Result, error) {
 	return res, nil
 }
 
-// addPort 添加放行规则（firewalld 仅 --permanent，不在此步 reload）。
+// addPort 添加放行规则（firewalld 仅 --permanent，不在此步 reload；非 root 走 sudo）。
 func addPort(fw string, port int) error {
 	switch fw {
 	case "firewalld":
-		cmd := exec.Command("firewall-cmd", "--permanent",
+		out, err := util.RunPrivileged("firewall-cmd", "--permanent",
 			fmt.Sprintf("--add-port=%d/tcp", port))
-		out, err := cmd.CombinedOutput()
 		if err != nil {
 			s := string(out)
 			if strings.Contains(s, "ALREADY_ENABLED") {
 				return fmt.Errorf("ALREADY")
 			}
-			return fmt.Errorf("%s", strings.TrimSpace(s))
+			msg := strings.TrimSpace(s)
+			if msg == "" {
+				msg = err.Error()
+			}
+			return fmt.Errorf("%s", msg)
 		}
 		return nil
 	case "ufw":
-		check := exec.Command("ufw", "status")
-		if out, _ := check.CombinedOutput(); strings.Contains(string(out), fmt.Sprintf("%d/tcp", port)) {
+		if out, _ := util.RunPrivileged("ufw", "status"); strings.Contains(string(out), fmt.Sprintf("%d/tcp", port)) {
 			return fmt.Errorf("ALREADY")
 		}
-		return exec.Command("ufw", "allow", fmt.Sprintf("%d/tcp", port)).Run()
+		out, err := util.RunPrivileged("ufw", "allow", fmt.Sprintf("%d/tcp", port))
+		if err != nil {
+			msg := strings.TrimSpace(string(out))
+			if msg == "" {
+				msg = err.Error()
+			}
+			return fmt.Errorf("%s", msg)
+		}
+		return nil
 	case "iptables":
-		check := exec.Command("iptables", "-C", "INPUT", "-p", "tcp", "--dport",
-			fmt.Sprintf("%d", port), "-j", "ACCEPT")
-		if check.Run() == nil {
+		if _, err := util.RunPrivileged("iptables", "-C", "INPUT", "-p", "tcp", "--dport",
+			fmt.Sprintf("%d", port), "-j", "ACCEPT"); err == nil {
 			return fmt.Errorf("ALREADY")
 		}
-		return exec.Command("iptables", "-A", "INPUT", "-p", "tcp", "--dport",
-			fmt.Sprintf("%d", port), "-j", "ACCEPT").Run()
+		out, err := util.RunPrivileged("iptables", "-A", "INPUT", "-p", "tcp", "--dport",
+			fmt.Sprintf("%d", port), "-j", "ACCEPT")
+		if err != nil {
+			msg := strings.TrimSpace(string(out))
+			if msg == "" {
+				msg = err.Error()
+			}
+			return fmt.Errorf("%s", msg)
+		}
+		return nil
 	default:
 		return fmt.Errorf("未知防火墙: %s", fw)
 	}

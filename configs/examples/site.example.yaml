@@ -33,11 +33,11 @@ overrides:
 
 # ===== 路径规划 =====
 paths:
-  workspace: /workspace/waterwork
+  workspace: /workspace
   # 与 middleware/nginx/html 一致（compose 挂载 /usr/share/nginx/html）
   nginxHtml: /workspace/middleware/nginx/html
   # 独立交付包（可选，非 platform/middleware 子目录）
-  waterwork: /workspace/waterwork-4.1.1
+  waterwork: /workspace/sz-waterwork
   intelligentModel: /workspace/wpg-intelligent-model-4.1.2
 
 fetchBaseUrl: "https://packages.example.com/packages"

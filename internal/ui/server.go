@@ -25,6 +25,7 @@ import (
 	"github.com/wpg/wpgctl/internal/state"
 	"github.com/wpg/wpgctl/internal/status"
 	"github.com/wpg/wpgctl/internal/util"
+	"github.com/wpg/wpgctl/internal/verify"
 )
 
 // Options 控制台启动选项。
@@ -113,20 +114,25 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/deliveries/export", s.handleDeliveryExport)
 	s.mux.HandleFunc("/api/precheck", s.handlePrecheck)
 	s.mux.HandleFunc("/api/init", s.handleInit)
+	s.mux.HandleFunc("/api/workspace", s.handleWorkspace)
 	s.mux.HandleFunc("/api/deploy", s.handleDeploy)
 	s.mux.HandleFunc("/api/module/catalog", s.handleModuleCatalog)
+	s.mux.HandleFunc("/api/module/path", s.handleModulePath)
 	s.mux.HandleFunc("/api/module/deploy", s.handleModuleDeploy)
 	s.mux.HandleFunc("/api/module/patch-env", s.handleModulePatchEnv)
 	s.mux.HandleFunc("/api/nginx/patch", s.handleNginxPatch)
 	s.mux.HandleFunc("/api/nacos/import", s.handleNacosImport)
+	s.mux.HandleFunc("/api/db/apply", s.handleDBApply)
 	s.mux.HandleFunc("/api/firewall/ports", s.handleFirewallPorts)
 	s.mux.HandleFunc("/api/firewall/start", s.handleFirewallStart)
+	s.mux.HandleFunc("/api/verify", s.handleVerify)
 	s.mux.HandleFunc("/api/preview", s.handlePreview)
 	s.mux.HandleFunc("/api/upgrade", s.handleUpgrade)
 	s.mux.HandleFunc("/api/rollback", s.handleRollback)
 	s.mux.HandleFunc("/api/fetch", s.handleFetch)
 	s.mux.HandleFunc("/api/latest", s.handleLatestDeploy)
 	s.mux.HandleFunc("/api/status", s.handleStatus)
+	s.mux.HandleFunc("/api/status/action", s.handleStatusAction)
 	s.mux.HandleFunc("/api/deployments", s.handleDeployments)
 	s.mux.HandleFunc("/api/jobs/", s.handleJob)
 	s.mux.HandleFunc("/api/ws/logs", s.handleWSLogs)
@@ -201,9 +207,9 @@ middleware:
   redis: { host: 127.0.0.1, port: 6377, password: "SJ(Qu%(kfXQBjxyT" }
   kafka: { host: 127.0.0.1, port: 9092 }
 paths:
-  workspace: /workspace/waterwork
+  workspace: /workspace
   nginxHtml: /workspace/middleware/nginx/html
-  waterwork: /workspace/waterwork-4.1.1
+  waterwork: /workspace/sz-waterwork
   intelligentModel: /workspace/wpg-intelligent-model-4.1.2
 `
 		s.writeJSON(w, 200, map[string]any{
@@ -375,7 +381,7 @@ func (s *Server) handleInit(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if len(site.Nodes) > 1 && !body.Local {
-			s.appendLog(job, fmt.Sprintf("多机模式：本机 init 后将 SSH 分发到 %d 台从机（目录/防火墙）", len(site.Nodes)-1))
+			s.appendLog(job, fmt.Sprintf("多机模式：本机 init 后将 SSH 分发到 %d 台从机（上传 Docker 离线包并安装、建目录、防火墙）", len(site.Nodes)-1))
 		}
 		var mf *config.Manifest
 		if body.Manifest != "" {
@@ -386,6 +392,7 @@ func (s *Server) handleInit(w http.ResponseWriter, r *http.Request) {
 			BasePackage: body.Base, DockerPackage: body.DockerPackage,
 			LocalOnly: body.Local, SitePath: s.opts.SitePath,
 			SSHPassword: body.SSHPassword, SSHKeyPath: body.SSHKeyPath,
+			Log: func(line string) { s.appendLog(job, line) },
 		})
 		if err != nil {
 			job.Result = res
@@ -461,20 +468,134 @@ func (s *Server) handleDeploy(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
-	composeDir := ""
-	if site, err := config.LoadSite(s.opts.SitePath); err == nil {
-		composeDir = filepath.Join(site.Paths.Workspace, "rendered")
-	}
-	res, err := status.QueryServices(composeDir)
-	if err != nil {
-		s.writeJSON(w, 200, map[string]any{"services": []any{}, "warning": err.Error()})
+	if r.Method != http.MethodGet && r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", 405)
 		return
 	}
-	s.writeJSON(w, 200, map[string]any{
+	var body struct {
+		SSHPassword string `json:"sshPassword"`
+		SSHKeyPath  string `json:"sshKeyPath"`
+	}
+	if r.Method == http.MethodPost {
+		_ = json.NewDecoder(r.Body).Decode(&body)
+	}
+	s.writeStatusJSON(w, false, body.SSHPassword, body.SSHKeyPath)
+}
+
+func (s *Server) handleStatusAction(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+	var body struct {
+		Action      string `json:"action"`
+		Name        string `json:"name"`
+		ComposeDir  string `json:"composeDir"`
+		NodeIP      string `json:"nodeIP"`
+		SSHPassword string `json:"sshPassword"`
+		SSHKeyPath  string `json:"sshKeyPath"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		s.writeJSON(w, 400, map[string]string{"error": "invalid json"})
+		return
+	}
+	site, _ := config.LoadSite(s.opts.SitePath)
+	if err := status.RunClusterAction(status.ActionOptions{
+		Action:      body.Action,
+		Name:        body.Name,
+		ComposeDir:  body.ComposeDir,
+		NodeIP:      body.NodeIP,
+		Site:        site,
+		SSHPassword: body.SSHPassword,
+		SSHKeyPath:  body.SSHKeyPath,
+	}); err != nil {
+		s.writeJSON(w, 400, map[string]string{"error": err.Error()})
+		return
+	}
+	s.writeStatusJSON(w, true, body.SSHPassword, body.SSHKeyPath)
+}
+
+// writeStatusJSON 输出本机 + 从机 Docker 汇总；ok 为 true 时带上动作成功标记。
+func (s *Server) writeStatusJSON(w http.ResponseWriter, ok bool, sshPassword, sshKeyPath string) {
+	var site *config.SiteConfig
+	composeDir := ""
+	if loaded, err := config.LoadSite(s.opts.SitePath); err == nil {
+		site = loaded
+		composeDir = filepath.Join(site.Paths.Workspace, "rendered")
+	}
+	res, _ := status.QueryCluster(status.ClusterOptions{
+		Site:        site,
+		ComposeRoot: composeDir,
+		SSHPassword: sshPassword,
+		SSHKeyPath:  sshKeyPath,
+	})
+	payload := map[string]any{
 		"services": res.Services,
+		"nodes":    res.Nodes,
 		"source":   res.Source,
 		"warning":  res.Warning,
-	})
+		"running":  res.Running,
+		"stopped":  res.Stopped,
+		"total":    res.Total,
+	}
+	if ok {
+		payload["ok"] = true
+	}
+	s.writeJSON(w, 200, payload)
+}
+
+func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost && r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+	var body struct {
+		SSHPassword string `json:"sshPassword"`
+		SSHKeyPath  string `json:"sshKeyPath"`
+	}
+	if r.Method == http.MethodPost {
+		_ = json.NewDecoder(r.Body).Decode(&body)
+	}
+	site, err := config.LoadSite(s.opts.SitePath)
+	if err != nil {
+		s.writeJSON(w, 400, map[string]string{"error": err.Error()})
+		return
+	}
+	job := s.newJob("verify")
+	go func() {
+		s.appendLog(job, "开始验收：检查容器状态与关键端口…")
+		rep, verr := verify.Run(verify.Options{
+			Site:        site,
+			SSHPassword: body.SSHPassword,
+			SSHKeyPath:  body.SSHKeyPath,
+		})
+		job.Result = rep
+		if verr != nil {
+			s.failJob(job, verr.Error())
+			return
+		}
+		if rep != nil {
+			s.appendLog(job, rep.Summary)
+			for _, wmsg := range rep.Warnings {
+				s.appendLog(job, "WARN: "+wmsg)
+			}
+			for _, p := range rep.Ports {
+				mark := "OK"
+				if !p.OK {
+					mark = "FAIL"
+				}
+				s.appendLog(job, fmt.Sprintf("[%s] %s %s:%d — %s", mark, p.Name, p.Host, p.Port, p.Message))
+			}
+			if rep.OK {
+				s.okJob(job, "验收通过")
+				return
+			}
+			s.failJob(job, rep.Summary)
+			return
+		}
+		s.okJob(job, "验收完成")
+	}()
+	s.writeJSON(w, 202, job)
 }
 
 func (s *Server) handleDeployments(w http.ResponseWriter, r *http.Request) {

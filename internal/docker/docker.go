@@ -75,14 +75,38 @@ func (r *Runner) MissingImages(images []string) []string {
 	return missing
 }
 
-// LoadImage 执行 docker load -i <tar>，返回本次 load 后 docker images 中新增的 tag。
+// LoadImage 执行 docker load -i <tar>，返回本次 load 后 docker images 中新增的 tag（无 tag 时退回 Loaded image ID）。
 func (r *Runner) LoadImage(tarPath string) ([]string, error) {
 	before, _ := r.ListLocalImages()
-	if _, err := r.run("load", "-i", tarPath); err != nil {
+	out, err := r.run("load", "-i", tarPath)
+	if err != nil {
 		return nil, fmt.Errorf("docker load 失败 (%s): %w", tarPath, err)
 	}
 	after, _ := r.ListLocalImages()
-	return diffImageRefs(before, after), nil
+	refs := diffImageRefs(before, after)
+	if len(refs) == 0 {
+		refs = parseLoadedImages(out)
+	}
+	if len(refs) == 0 {
+		refs = parseLoadedImageIDs(out)
+	}
+	return refs, nil
+}
+
+// TagImage 给已有镜像打 tag（离线 load 后补齐 Dockerfile 的 FROM 名，如 java:8）。
+func (r *Runner) TagImage(src, dest string) error {
+	src = strings.TrimSpace(src)
+	dest = strings.TrimSpace(dest)
+	if src == "" || dest == "" {
+		return fmt.Errorf("docker tag 参数为空")
+	}
+	if src == dest {
+		return nil
+	}
+	if _, err := r.run("tag", src, dest); err != nil {
+		return fmt.Errorf("docker tag %s -> %s 失败: %w", src, dest, err)
+	}
+	return nil
 }
 
 // ListLocalImages 列出本地全部 Repository:Tag。
@@ -124,6 +148,23 @@ func parseLoadedImages(out string) []string {
 	return refs
 }
 
+func parseLoadedImageIDs(out string) []string {
+	var ids []string
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		const prefix = "Loaded image ID:"
+		idx := strings.Index(line, prefix)
+		if idx < 0 {
+			continue
+		}
+		id := strings.TrimSpace(line[idx+len(prefix):])
+		if id != "" {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
 func diffImageRefs(before, after []string) []string {
 	set := map[string]struct{}{}
 	for _, b := range before {
@@ -139,7 +180,7 @@ func diffImageRefs(before, after []string) []string {
 }
 
 // ComposeUp 在指定目录执行 compose up -d（自动兼容 docker compose 与 docker-compose）。
-// build 为 true 时追加 --build，从 compose 上下文（如 jar 目录）构建镜像，不依赖预 load 的 tar。
+// build 为 true 时追加 --build；离线现场须先 load Dockerfile 的 FROM 基础镜像（如 java8.tar → java:8）。
 func (r *Runner) ComposeUp(dir string, file string, profiles []string, build bool, services ...string) error {
 	args := []string{}
 	if file != "" {
@@ -168,6 +209,12 @@ func (r *Runner) ListContainers() ([]ComposeService, error) {
 	if err != nil {
 		return nil, err
 	}
+	return ParseDockerPsJSON(out)
+}
+
+// ParseDockerPsJSON 解析 `docker ps -a --format {{json .}}` 的逐行 JSON。
+// 跳过非 `{` 开头的行（SSH/sudo 杂讯），避免整表失败。
+func ParseDockerPsJSON(out string) ([]ComposeService, error) {
 	out = strings.TrimSpace(out)
 	if out == "" {
 		return nil, nil
@@ -175,31 +222,79 @@ func (r *Runner) ListContainers() ([]ComposeService, error) {
 	var list []ComposeService
 	for _, line := range strings.Split(out, "\n") {
 		line = strings.TrimSpace(line)
-		if line == "" {
+		if line == "" || !strings.HasPrefix(line, "{") {
 			continue
 		}
-		var row struct {
-			Names  string `json:"Names"`
-			State  string `json:"State"`
-			Status string `json:"Status"`
-			Image  string `json:"Image"`
+		s, err := parseDockerPsLine(line)
+		if err != nil {
+			return nil, err
 		}
-		if err := json.Unmarshal([]byte(line), &row); err != nil {
-			return nil, fmt.Errorf("解析 docker ps 失败: %w", err)
-		}
-		name := row.Names
-		if idx := strings.Index(name, ","); idx >= 0 {
-			name = name[:idx]
-		}
-		list = append(list, ComposeService{
-			Name:    name,
-			Service: name,
-			State:   row.State,
-			Status:  row.Status,
-			Image:   row.Image,
-		})
+		list = append(list, s)
 	}
 	return list, nil
+}
+
+func parseDockerPsLine(line string) (ComposeService, error) {
+	var row struct {
+		ID        string          `json:"ID"`
+		Names     string          `json:"Names"`
+		State     string          `json:"State"`
+		Status    string          `json:"Status"`
+		Image     string          `json:"Image"`
+		Ports     string          `json:"Ports"`
+		CreatedAt string          `json:"CreatedAt"`
+		Labels    json.RawMessage `json:"Labels"`
+		Networks  json.RawMessage `json:"Networks"`
+	}
+	if err := json.Unmarshal([]byte(line), &row); err != nil {
+		return ComposeService{}, fmt.Errorf("解析 docker ps 失败: %w", err)
+	}
+	name := row.Names
+	if idx := strings.Index(name, ","); idx >= 0 {
+		name = name[:idx]
+	}
+	labels := parseDockerLabels(row.Labels)
+	svc := labels["com.docker.compose.service"]
+	if svc == "" {
+		svc = name
+	}
+	return ComposeService{
+		ID:         row.ID,
+		Name:       name,
+		Service:    svc,
+		State:      row.State,
+		Status:     row.Status,
+		Health:     healthFromStatus(row.Status),
+		Image:      row.Image,
+		Ports:      row.Ports,
+		Created:    compactCreated(row.CreatedAt),
+		Project:    labels["com.docker.compose.project"],
+		ComposeDir: labels["com.docker.compose.project.working_dir"],
+		Networks:   networksFromRaw(row.Networks),
+	}, nil
+}
+
+func parseDockerLabels(raw json.RawMessage) map[string]string {
+	out := map[string]string{}
+	if len(raw) == 0 {
+		return out
+	}
+	var obj map[string]string
+	if json.Unmarshal(raw, &obj) == nil {
+		return obj
+	}
+	var s string
+	if json.Unmarshal(raw, &s) != nil || s == "" {
+		return out
+	}
+	for _, part := range strings.Split(s, ",") {
+		k, v, ok := strings.Cut(part, "=")
+		if !ok {
+			continue
+		}
+		out[strings.TrimSpace(k)] = strings.TrimSpace(v)
+	}
+	return out
 }
 
 // ComposePs 返回 compose 服务状态 JSON。
@@ -224,14 +319,49 @@ func (r *Runner) ComposePs(dir, file string) ([]ComposeService, error) {
 	return parseComposePs(out)
 }
 
-// ComposeService compose ps 单条记录。
+// ComposeService compose / docker ps 单条记录，供状态页与 CLI 展示。
 type ComposeService struct {
-	Name    string `json:"Name"`
-	Service string `json:"Service"`
-	State   string `json:"State"`
-	Status  string `json:"Status"`
-	Health  string `json:"Health"`
-	Image   string `json:"Image"`
+	ID         string `json:"ID,omitempty"`
+	Name       string `json:"Name"`
+	Service    string `json:"Service"`
+	State      string `json:"State"`
+	Status     string `json:"Status"`
+	Health     string `json:"Health"`
+	Image      string `json:"Image"`
+	Ports      string `json:"Ports,omitempty"`
+	Created    string `json:"Created,omitempty"`    // 创建时间，已去掉时区后缀便于现场阅读
+	Project    string `json:"Project,omitempty"`
+	ComposeDir string `json:"ComposeDir,omitempty"` // compose 工作目录，排障与 Down 栈用
+	Networks   string `json:"Networks,omitempty"`   // 加入的网络，逗号分隔
+	ExitCode   *int   `json:"ExitCode,omitempty"`   // 非运行中才带退出码，避免 running 也显示 0
+	Node       string `json:"Node,omitempty"`       // 节点名（多机状态页）
+	NodeIP     string `json:"NodeIP,omitempty"`     // 节点 IP，启停时用来走 SSH
+	Local      bool   `json:"Local,omitempty"`      // true 表示本机 Docker
+}
+
+// composePsJSON 兼容 docker compose ps --format json：Created 可能是 unix 秒，Ports 可能只在 Publishers 里。
+type composePsJSON struct {
+	ID         string             `json:"ID"`
+	Name       string             `json:"Name"`
+	Service    string             `json:"Service"`
+	State      string             `json:"State"`
+	Status     string             `json:"Status"`
+	Health     string             `json:"Health"`
+	Image      string             `json:"Image"`
+	Ports      string             `json:"Ports"`
+	Project    string             `json:"Project"`
+	ExitCode   int                `json:"ExitCode"`
+	Created    json.RawMessage    `json:"Created"`
+	Labels     json.RawMessage    `json:"Labels"`
+	Networks   json.RawMessage    `json:"Networks"`
+	Publishers []composePublisher `json:"Publishers"`
+}
+
+type composePublisher struct {
+	URL           string `json:"URL"`
+	TargetPort    int    `json:"TargetPort"`
+	PublishedPort int    `json:"PublishedPort"`
+	Protocol      string `json:"Protocol"`
 }
 
 func parseComposePs(out string) ([]ComposeService, error) {
@@ -241,9 +371,13 @@ func parseComposePs(out string) ([]ComposeService, error) {
 	}
 	// compose 新版本逐行 JSON；旧版本可能是数组。
 	if strings.HasPrefix(out, "[") {
-		var list []ComposeService
-		if err := json.Unmarshal([]byte(out), &list); err != nil {
+		var rows []composePsJSON
+		if err := json.Unmarshal([]byte(out), &rows); err != nil {
 			return nil, err
+		}
+		list := make([]ComposeService, 0, len(rows))
+		for _, row := range rows {
+			list = append(list, composeServiceFromJSON(row))
 		}
 		return list, nil
 	}
@@ -253,13 +387,142 @@ func parseComposePs(out string) ([]ComposeService, error) {
 		if line == "" {
 			continue
 		}
-		var s ComposeService
-		if err := json.Unmarshal([]byte(line), &s); err != nil {
+		var row composePsJSON
+		if err := json.Unmarshal([]byte(line), &row); err != nil {
 			return nil, fmt.Errorf("解析 compose ps 失败: %w", err)
 		}
-		list = append(list, s)
+		list = append(list, composeServiceFromJSON(row))
 	}
 	return list, nil
+}
+
+func composeServiceFromJSON(row composePsJSON) ComposeService {
+	ports := strings.TrimSpace(row.Ports)
+	if ports == "" {
+		ports = portsFromPublishers(row.Publishers)
+	}
+	labels := parseDockerLabels(row.Labels)
+	health := strings.TrimSpace(row.Health)
+	if health == "" {
+		health = healthFromStatus(row.Status)
+	}
+	svc := strings.TrimSpace(row.Service)
+	if svc == "" {
+		svc = row.Name
+	}
+	project := strings.TrimSpace(row.Project)
+	if project == "" {
+		project = labels["com.docker.compose.project"]
+	}
+	return ComposeService{
+		ID:         row.ID,
+		Name:       row.Name,
+		Service:    svc,
+		State:      row.State,
+		Status:     row.Status,
+		Health:     health,
+		Image:      row.Image,
+		Ports:      ports,
+		Created:    createdFromRaw(row.Created),
+		Project:    project,
+		ComposeDir: labels["com.docker.compose.project.working_dir"],
+		Networks:   networksFromRaw(row.Networks),
+		ExitCode:   exitCodeForState(row.State, row.Status, row.ExitCode),
+	}
+}
+
+func healthFromStatus(status string) string {
+	switch {
+	case strings.Contains(status, "(healthy)"):
+		return "healthy"
+	case strings.Contains(status, "(unhealthy)"):
+		return "unhealthy"
+	case strings.Contains(status, "(health: starting)"):
+		return "starting"
+	default:
+		return ""
+	}
+}
+
+func compactCreated(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	if i := strings.Index(s, " +"); i > 0 {
+		return s[:i]
+	}
+	if i := strings.Index(s, " -"); i >= 10 {
+		return s[:i]
+	}
+	return s
+}
+
+func createdFromRaw(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var n json.Number
+	if json.Unmarshal(raw, &n) == nil {
+		v, err := n.Int64()
+		if err == nil && v > 0 {
+			if v > 1e12 {
+				v = v / 1000
+			}
+			return time.Unix(v, 0).Format("2006-01-02 15:04:05")
+		}
+	}
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return compactCreated(s)
+	}
+	return ""
+}
+
+func networksFromRaw(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return strings.TrimSpace(s)
+	}
+	var arr []string
+	if json.Unmarshal(raw, &arr) == nil {
+		return strings.Join(arr, ", ")
+	}
+	return ""
+}
+
+func portsFromPublishers(pubs []composePublisher) string {
+	parts := make([]string, 0, len(pubs))
+	for _, p := range pubs {
+		if p.PublishedPort == 0 {
+			continue
+		}
+		proto := p.Protocol
+		if proto == "" {
+			proto = "tcp"
+		}
+		host := p.URL
+		if host == "" {
+			host = "0.0.0.0"
+		}
+		parts = append(parts, fmt.Sprintf("%s:%d->%d/%s", host, p.PublishedPort, p.TargetPort, proto))
+	}
+	return strings.Join(parts, ", ")
+}
+
+func exitCodeForState(state, status string, code int) *int {
+	st := strings.ToLower(strings.TrimSpace(state))
+	if st == "running" || st == "up" {
+		return nil
+	}
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(status)), "up") {
+		return nil
+	}
+	c := code
+	return &c
 }
 
 func parseComposePsStandalone(out string) ([]ComposeService, error) {
@@ -299,6 +562,65 @@ func (r *Runner) Logs(container string, tail int, follow bool) (string, error) {
 	}
 	args = append(args, container)
 	return r.runIn(r.bin(), "", args...)
+}
+
+// StartContainer 启动已存在的容器。
+func (r *Runner) StartContainer(name string) error {
+	_, err := r.run("start", name)
+	if err != nil {
+		return fmt.Errorf("docker start 失败: %w", err)
+	}
+	return nil
+}
+
+// StopContainer 停止运行中的容器。
+func (r *Runner) StopContainer(name string) error {
+	_, err := r.run("stop", name)
+	if err != nil {
+		return fmt.Errorf("docker stop 失败: %w", err)
+	}
+	return nil
+}
+
+// RestartContainer 重启容器。
+func (r *Runner) RestartContainer(name string) error {
+	_, err := r.run("restart", name)
+	if err != nil {
+		return fmt.Errorf("docker restart 失败: %w", err)
+	}
+	return nil
+}
+
+// RemoveContainer 强制删除容器（单个容器 down）。
+func (r *Runner) RemoveContainer(name string) error {
+	_, err := r.run("rm", "-f", name)
+	if err != nil {
+		return fmt.Errorf("docker rm 失败: %w", err)
+	}
+	return nil
+}
+
+// ComposeDown 在指定目录执行 compose down。
+func (r *Runner) ComposeDown(dir, file string) error {
+	args := []string{}
+	if file != "" {
+		args = append(args, "-f", file)
+	}
+	args = append(args, "down")
+	_, err := r.runCompose(dir, args...)
+	if err != nil {
+		return fmt.Errorf("docker compose down 失败: %w", err)
+	}
+	return nil
+}
+
+// ComposeWorkingDir 读取容器 compose 工作目录标签。
+func (r *Runner) ComposeWorkingDir(container string) string {
+	out, err := r.run("inspect", "-f", `{{index .Config.Labels "com.docker.compose.project.working_dir"}}`, container)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(out)
 }
 
 // Build 在指定目录构建镜像并打 tag。

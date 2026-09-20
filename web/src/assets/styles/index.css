@@ -1,0 +1,8 @@
+/** 现场控制台全局样式入口；按页面/区域拆文件，main.js 只引这一份。 */
+@import './base.css';
+@import './topbar.css';
+@import './home.css';
+@import './panel.css';
+@import './status.css';
+@import './wizard.css';
+@import './element.css';

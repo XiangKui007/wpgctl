@@ -1,0 +1,231 @@
+/** 首页 hero 与 SOP 轨道。 */
+/* —— Hero —— */
+.hero {
+  display: grid;
+  grid-template-columns: 1.05fr 0.95fr;
+  gap: 2.5rem;
+  align-items: center;
+  max-width: var(--page);
+  margin: 0 auto;
+  padding: 2.4rem 1.5rem 1.75rem;
+  width: 100%;
+  min-height: 0;
+}
+
+.hero-copy {
+  animation: fade-in 0.4s ease both;
+}
+
+.hero h1 {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: clamp(2.8rem, 6vw, 4.6rem);
+  line-height: 0.95;
+  letter-spacing: -0.03em;
+  margin: 0 0 1rem;
+}
+
+.hero h1 em {
+  font-style: normal;
+  color: var(--water);
+}
+
+.hero p.lead {
+  margin: 0 0 2rem;
+  max-width: 26rem;
+  font-size: 1.15rem;
+  font-weight: 300;
+  line-height: 1.6;
+  color: var(--ink-soft);
+}
+
+.cta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.btn {
+  border: 0;
+  cursor: pointer;
+  padding: 0.85rem 1.5rem;
+  border-radius: var(--radius);
+  font-weight: 600;
+  transition: background 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
+}
+
+.btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.btn-primary {
+  background: var(--water);
+  color: #fff;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: var(--water-deep);
+}
+
+.btn-ghost {
+  background: transparent;
+  color: var(--ink);
+  border: 1px solid var(--line);
+}
+
+.btn-ghost:hover:not(:disabled) {
+  border-color: rgba(21, 36, 40, 0.22);
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.btn-sm {
+  padding: 0.45rem 0.85rem;
+  font-size: 0.88rem;
+}
+
+.btn-danger {
+  background: var(--danger);
+  color: #fff;
+  border-color: var(--danger);
+}
+
+.btn-danger:hover:not(:disabled) {
+  filter: brightness(0.92);
+}
+
+.hero-visual {
+  height: 280px;
+  animation: fade-in 0.5s ease 0.05s both;
+}
+
+.wave-panel {
+  height: 100%;
+  border-radius: 14px;
+  background: linear-gradient(145deg, #0a4f4a, #152428 65%);
+  position: relative;
+  overflow: hidden;
+  box-shadow: var(--shadow);
+}
+
+.wave-panel::before {
+  content: "";
+  position: absolute;
+  inset: auto -20% -40% -10%;
+  height: 75%;
+  background: radial-gradient(ellipse at center, rgba(20, 184, 166, 0.35), transparent 70%);
+}
+
+.wave-panel .meta {
+  position: absolute;
+  left: 1.75rem;
+  right: 1.75rem;
+  bottom: 1.75rem;
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.wave-panel .meta strong {
+  display: block;
+  font-family: var(--font-display);
+  font-size: 1.5rem;
+  margin-bottom: 0.35rem;
+}
+
+.wave-panel .meta span {
+  opacity: 0.7;
+  font-weight: 300;
+  font-size: 0.95rem;
+}
+
+/* —— Home rail —— */
+.home-rail {
+  max-width: var(--page);
+  margin: 0 auto 3rem;
+  padding: 0 1.5rem;
+  width: 100%;
+}
+
+.home-flags {
+  display: grid;
+  gap: 0.5rem;
+  margin-bottom: 1.25rem;
+}
+
+.flag {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.85rem;
+  padding: 0.95rem 1.15rem;
+  background: var(--surface);
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+}
+
+.flag strong {
+  font-weight: 600;
+}
+
+.flag span {
+  color: var(--ink-soft);
+}
+
+.flag.warn {
+  background: #fff8f1;
+  border-color: rgba(180, 83, 9, 0.18);
+}
+
+.flag.warn strong {
+  color: var(--warn);
+}
+
+.mode-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1.5rem;
+  padding: 1.25rem 1.4rem;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+}
+
+.mode-bar h2 {
+  margin: 0 0 0.35rem;
+  font-family: var(--font-display);
+  font-size: 1.25rem;
+  letter-spacing: -0.01em;
+}
+
+.mode-bar p {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 0.95rem;
+  line-height: 1.5;
+  max-width: 36rem;
+}
+
+.host-fill-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.65rem 0.85rem;
+  padding: 0.15rem 0 0.35rem;
+}
+
+.host-select {
+  border: 1px solid var(--line);
+  background: #fbfcfc;
+  padding: 0.4rem 0.65rem;
+  border-radius: var(--radius);
+  min-width: 10rem;
+  outline: none;
+}
+
+.host-select:focus {
+  border-color: var(--water);
+}
+
+.host-fill-msg {
+  font-size: 0.86rem;
+}

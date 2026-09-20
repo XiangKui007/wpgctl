@@ -14,17 +14,15 @@ import (
 var reComposeEnvLine = regexp.MustCompile(`^(\s*-\s*)([A-Za-z0-9_]+)=(.*)$`)
 
 // ComposeEnvReplacements 需写入 docker-compose environment 的变量（无 .env 的模块如 kafka）。
+// KAFKA_ADVERTISED_LISTENERS 使用「跑 Kafka 那台机」的 IP（middleware.kafka.host，或节点 services 含 kafka）。
 func ComposeEnvReplacements(site *config.SiteConfig) map[string]string {
 	if site == nil {
 		return nil
 	}
-	host := site.Middleware.Kafka.Host
+	host := kafkaAdvertiseHost(site)
 	port := site.Middleware.Kafka.Port
 	if port <= 0 {
 		port = 9092
-	}
-	if host == "" && len(site.Nodes) > 0 {
-		host = site.Nodes[0].IP
 	}
 	if host == "" {
 		return nil
@@ -32,6 +30,23 @@ func ComposeEnvReplacements(site *config.SiteConfig) map[string]string {
 	return map[string]string{
 		"KAFKA_ADVERTISED_LISTENERS": fmt.Sprintf("PLAINTEXT://%s:%d", host, port),
 	}
+}
+
+func kafkaAdvertiseHost(site *config.SiteConfig) string {
+	if h := strings.TrimSpace(site.Middleware.Kafka.Host); h != "" {
+		return h
+	}
+	for _, n := range site.Nodes {
+		for _, s := range n.Services {
+			if strings.EqualFold(strings.TrimSpace(s), "kafka") {
+				return strings.TrimSpace(n.IP)
+			}
+		}
+	}
+	if len(site.Nodes) > 0 {
+		return strings.TrimSpace(site.Nodes[0].IP)
+	}
+	return ""
 }
 
 // PatchComposeEnv 按 key 精确匹配 compose 中 `- KEY=VALUE` 行并替换 VALUE。
@@ -82,19 +97,24 @@ func PatchComposeEnv(composePath string, repl map[string]string) ([]string, erro
 	return changed, nil
 }
 
-// PatchComposeEnvForSite 对模块目录 compose 应用站点级 environment 补丁。
+// PatchComposeEnvForSite 对模块目录内全部 compose 应用站点级 environment 补丁。
 func PatchComposeEnvForSite(moduleDir string, site *config.SiteConfig) ([]string, error) {
-	compose, err := findComposeFile(moduleDir)
+	projects, err := findComposeProjects(moduleDir)
 	if err != nil {
-		return nil, err
+		// 市政/模型等目录若尚未找到 compose，Kafka 补丁可跳过，后续 compose up 会给出明确错误
+		return nil, nil
 	}
 	repl := ComposeEnvReplacements(site)
 	if len(repl) == 0 {
 		return nil, nil
 	}
-	changed, err := PatchComposeEnv(compose, repl)
-	if err != nil {
-		return nil, err
+	var all []string
+	for _, compose := range projects {
+		changed, err := PatchComposeEnv(compose, repl)
+		if err != nil {
+			return all, err
+		}
+		all = append(all, changed...)
 	}
-	return changed, nil
+	return all, nil
 }

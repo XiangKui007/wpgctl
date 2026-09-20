@@ -1,10 +1,11 @@
-// Package nacos 通过 OpenAPI 导入/更新 Nacos 配置（方案 §6.9）。
 package nacos
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"os"
@@ -18,30 +19,43 @@ import (
 
 // Options 导入选项。
 type Options struct {
-	Site      *config.SiteConfig
-	ConfigDir string // 已渲染的 nacos 配置目录
-	BackupDir string
+	Site       *config.SiteConfig
+	ConfigDir  string   // 可选：已渲染的 nacos 配置目录（逐文件发布，兼容旧流程）
+	ConfigZips []string // 可选：nacos*.zip，通过 Nacos 控制台 import API 直接上传（不解压）
+	BackupDir  string
+	Policy     string // zip 导入策略：OVERWRITE / SKIP / ABORT，默认 OVERWRITE
 }
 
 // Result 导入结果。
 type Result struct {
-	Created []string
-	Updated []string
-	Skipped []string
+	Created  []string `json:"created,omitempty"`
+	Updated  []string `json:"updated,omitempty"`
+	Skipped  []string `json:"skipped,omitempty"`
+	Imported []string `json:"imported,omitempty"` // 成功上传的 zip 文件名
 }
 
-// Run 导入渲染后的 Nacos 配置。
+// IsNacosConfigZip 文件名是否为 nacos 开头的 .zip（排除 .tar.zip）。
+func IsNacosConfigZip(path string) bool {
+	base := strings.ToLower(filepath.Base(strings.TrimSpace(path)))
+	if !strings.HasPrefix(base, "nacos") {
+		return false
+	}
+	if strings.HasSuffix(base, ".tar.zip") {
+		return false
+	}
+	return strings.HasSuffix(base, ".zip")
+}
+
+// Run 导入 Nacos 配置：优先 ConfigZips（直接上传 zip），否则走 ConfigDir 逐文件发布。
 func Run(opts Options) (*Result, error) {
 	if opts.Site == nil {
 		return nil, fmt.Errorf("site 不能为空")
 	}
-	if opts.ConfigDir == "" || !util.DirExists(opts.ConfigDir) {
-		return nil, fmt.Errorf("nacos 配置目录不存在: %s", opts.ConfigDir)
+	zips := normalizeZips(opts.ConfigZips)
+	hasDir := strings.TrimSpace(opts.ConfigDir) != "" && util.DirExists(opts.ConfigDir)
+	if len(zips) == 0 && !hasDir {
+		return nil, fmt.Errorf("请指定 nacos*.zip 或配置目录")
 	}
-	if opts.BackupDir == "" {
-		opts.BackupDir = filepath.Join(filepath.Dir(opts.ConfigDir), "nacos-backup")
-	}
-	_ = util.EnsureDir(opts.BackupDir)
 
 	n := opts.Site.Middleware.Nacos
 	if strings.TrimSpace(n.Username) == "" {
@@ -55,9 +69,9 @@ func Run(opts Options) (*Result, error) {
 		Base:     fmt.Sprintf("http://%s:%d", n.Host, n.Port),
 		Username: n.Username,
 		Password: n.Password,
-		HTTP:     &http.Client{Timeout: 30 * time.Second},
+		HTTP:     &http.Client{Timeout: 5 * time.Minute},
 	}
-	if err := cli.login(); err != nil {
+	if err := cli.loginWithRetry(nacosLoginWait); err != nil {
 		return nil, fmt.Errorf("Nacos 登录失败 (%s@%s): %w", cli.Username, cli.Base, err)
 	}
 	util.Infof("Nacos 已登录: %s namespace=%s", cli.Base, n.Namespace)
@@ -68,7 +82,57 @@ func Run(opts Options) (*Result, error) {
 	}
 
 	res := &Result{}
-	err := filepath.Walk(opts.ConfigDir, func(path string, info os.FileInfo, err error) error {
+	policy := strings.TrimSpace(opts.Policy)
+	if policy == "" {
+		policy = "OVERWRITE"
+	}
+
+	for _, z := range zips {
+		if !util.FileExists(z) {
+			return res, fmt.Errorf("zip 不存在: %s", z)
+		}
+		if !IsNacosConfigZip(z) {
+			return res, fmt.Errorf("不是 nacos*.zip: %s", filepath.Base(z))
+		}
+		util.Infof("上传导入 zip（不解压）: %s → namespace=%s policy=%s", filepath.Base(z), ns, policy)
+		if err := cli.ImportConfigZip(ns, z, policy); err != nil {
+			return res, fmt.Errorf("导入 %s 失败: %w", filepath.Base(z), err)
+		}
+		res.Imported = append(res.Imported, filepath.Base(z))
+		util.Successf("已导入: %s", filepath.Base(z))
+	}
+
+	if hasDir {
+		if opts.BackupDir == "" {
+			opts.BackupDir = filepath.Join(filepath.Dir(opts.ConfigDir), "nacos-backup")
+		}
+		_ = util.EnsureDir(opts.BackupDir)
+		if err := importConfigDir(cli, ns, opts.ConfigDir, opts.BackupDir, res); err != nil {
+			return res, err
+		}
+	}
+	return res, nil
+}
+
+func normalizeZips(in []string) []string {
+	seen := map[string]struct{}{}
+	var out []string
+	for _, z := range in {
+		z = strings.TrimSpace(z)
+		if z == "" {
+			continue
+		}
+		if _, ok := seen[z]; ok {
+			continue
+		}
+		seen[z] = struct{}{}
+		out = append(out, z)
+	}
+	return out
+}
+
+func importConfigDir(cli *Client, ns, configDir, backupDir string, res *Result) error {
+	return filepath.Walk(configDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() {
 			return err
 		}
@@ -82,7 +146,7 @@ func Run(opts Options) (*Result, error) {
 		}
 		dataID := info.Name()
 		group := filepath.Base(filepath.Dir(path))
-		if group == "." || group == filepath.Base(opts.ConfigDir) {
+		if group == "." || group == filepath.Base(configDir) {
 			group = "DEFAULT_GROUP"
 		}
 
@@ -93,7 +157,7 @@ func Run(opts Options) (*Result, error) {
 			return nil
 		}
 		if err == nil && old != "" {
-			bak := filepath.Join(opts.BackupDir, group+"__"+dataID+".bak")
+			bak := filepath.Join(backupDir, group+"__"+dataID+".bak")
 			_ = os.WriteFile(bak, []byte(old), 0o644)
 			util.Infof("已备份旧配置: %s", bak)
 			res.Updated = append(res.Updated, dataID)
@@ -106,7 +170,6 @@ func Run(opts Options) (*Result, error) {
 		util.Successf("已发布: %s@%s", dataID, group)
 		return nil
 	})
-	return res, err
 }
 
 // Client Nacos OpenAPI 客户端。
@@ -121,6 +184,28 @@ type Client struct {
 type loginResp struct {
 	AccessToken string `json:"accessToken"`
 	TokenTTL    int    `json:"tokenTtl"`
+}
+
+// nacosLoginWait 刚 compose up 后控制台往往还没起来，导入前轮询登录。
+var nacosLoginWait = 90 * time.Second
+
+func (c *Client) loginWithRetry(wait time.Duration) error {
+	if wait <= 0 {
+		return c.login()
+	}
+	deadline := time.Now().Add(wait)
+	var last error
+	for {
+		last = c.login()
+		if last == nil {
+			return nil
+		}
+		if !time.Now().Before(deadline) {
+			break
+		}
+		time.Sleep(2 * time.Second)
+	}
+	return fmt.Errorf("等待 Nacos 可登录超时（%s）: %w", wait.Round(time.Second), last)
 }
 
 func (c *Client) login() error {
@@ -192,6 +277,67 @@ func (c *Client) EnsureNamespace(namespaceID, namespaceName string) error {
 		return fmt.Errorf("创建命名空间失败 HTTP %d: %s", resp2.StatusCode, string(b))
 	}
 	util.Infof("已创建 Nacos 命名空间: %s", namespaceID)
+	return nil
+}
+
+// ImportConfigZip 把导出的 zip 直接上传到 Nacos（控制台 import=true，不解压）。
+func (c *Client) ImportConfigZip(namespace, zipPath, policy string) error {
+	f, err := os.Open(zipPath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	var body bytes.Buffer
+	w := multipart.NewWriter(&body)
+	part, err := w.CreateFormFile("file", filepath.Base(zipPath))
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(part, f); err != nil {
+		return err
+	}
+	if err := w.WriteField("policy", policy); err != nil {
+		return err
+	}
+	if err := w.Close(); err != nil {
+		return err
+	}
+
+	u, _ := url.Parse(c.Base + "/nacos/v1/cs/configs")
+	q := u.Query()
+	q.Set("import", "true")
+	q.Set("namespace", namespace)
+	c.withToken(q)
+	u.RawQuery = q.Encode()
+
+	req, err := http.NewRequest(http.MethodPost, u.String(), &body)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	text := strings.TrimSpace(string(b))
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, text)
+	}
+	// 部分版本返回 {"code":200,...}，失败如 code=100005「导入的文件数据为空」
+	var jr struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+	}
+	if json.Unmarshal(b, &jr) == nil && jr.Code != 0 && jr.Code != 200 {
+		msg := jr.Message
+		if msg == "" {
+			msg = text
+		}
+		return fmt.Errorf("Nacos 返回 code=%d: %s", jr.Code, msg)
+	}
 	return nil
 }
 

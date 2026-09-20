@@ -8,11 +8,14 @@
 package sshx
 
 import (
+	"bufio"
 	"fmt"
 	"io"
 	"net"
 	"os"
+	"path"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/pkg/sftp"
@@ -24,8 +27,14 @@ import (
 type Client interface {
 	// Run 在远端执行命令，返回合并输出。
 	Run(command string) (string, error)
+	// RunStream 在远端执行命令，stdout/stderr 按行回调；stdin 非空时写入命令标准输入（用于 sudo -S）。
+	RunStream(command, stdin string, onLine func(line string)) error
 	// Upload 上传本地文件到远端路径。
 	Upload(localPath, remotePath string) error
+	// UploadDir 递归上传目录；skip 返回 true 的相对路径（/ 分隔）跳过；progress 每个文件回调一次。
+	UploadDir(localDir, remoteDir string, skip func(rel string, isDir bool) bool, progress func(msg string)) error
+	// Exists 远端路径是否存在（文件或目录）。
+	Exists(remotePath string) bool
 	// Close 关闭连接。
 	Close() error
 }
@@ -126,29 +135,148 @@ func (c *sshClient) Run(command string) (string, error) {
 	return string(out), err
 }
 
+func (c *sshClient) RunStream(command, stdin string, onLine func(string)) error {
+	sess, err := c.client.NewSession()
+	if err != nil {
+		return err
+	}
+	defer sess.Close()
+	if stdin != "" {
+		sess.Stdin = strings.NewReader(stdin)
+	}
+	pr, pw := io.Pipe()
+	sess.Stdout = pw
+	sess.Stderr = pw
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		sc := bufio.NewScanner(pr)
+		sc.Buffer(make([]byte, 64*1024), 4*1024*1024)
+		for sc.Scan() {
+			if onLine != nil {
+				onLine(sc.Text())
+			}
+		}
+	}()
+	runErr := sess.Run(command)
+	_ = pw.Close()
+	<-done
+	return runErr
+}
+
 func (c *sshClient) Upload(localPath, remotePath string) error {
 	sc, err := sftp.NewClient(c.client)
 	if err != nil {
 		return fmt.Errorf("sftp 会话失败: %w", err)
 	}
 	defer sc.Close()
+	return uploadFile(sc, localPath, remotePath, 0o755)
+}
 
+func uploadFile(sc *sftp.Client, localPath, remotePath string, mode os.FileMode) error {
 	src, err := os.Open(localPath)
 	if err != nil {
 		return err
 	}
 	defer src.Close()
 
-	_ = sc.MkdirAll(filepath.ToSlash(filepath.Dir(remotePath)))
+	_ = sc.MkdirAll(path.Dir(remotePath))
 	dst, err := sc.Create(remotePath)
 	if err != nil {
-		return fmt.Errorf("创建远端文件失败: %w", err)
+		return fmt.Errorf("创建远端文件失败 %s: %w", remotePath, err)
 	}
-	defer dst.Close()
 	if _, err := io.Copy(dst, src); err != nil {
+		_ = dst.Close()
 		return err
 	}
-	return sc.Chmod(remotePath, 0o755)
+	if err := dst.Close(); err != nil {
+		return err
+	}
+	return sc.Chmod(remotePath, mode)
+}
+
+func (c *sshClient) UploadDir(localDir, remoteDir string, skip func(rel string, isDir bool) bool, progress func(string)) error {
+	sc, err := sftp.NewClient(c.client)
+	if err != nil {
+		return fmt.Errorf("sftp 会话失败: %w", err)
+	}
+	defer sc.Close()
+
+	localDir = filepath.Clean(localDir)
+	if err := sc.MkdirAll(remoteDir); err != nil {
+		return fmt.Errorf("创建远端目录失败 %s: %w", remoteDir, err)
+	}
+	var count int
+	var total int64
+	err = filepath.Walk(localDir, func(p string, info os.FileInfo, werr error) error {
+		if werr != nil {
+			return werr
+		}
+		rel, _ := filepath.Rel(localDir, p)
+		rel = filepath.ToSlash(rel)
+		if rel == "." {
+			return nil
+		}
+		if skip != nil && skip(rel, info.IsDir()) {
+			if info.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		remote := path.Join(remoteDir, rel)
+		if info.IsDir() {
+			return sc.MkdirAll(remote)
+		}
+		if !info.Mode().IsRegular() {
+			return nil
+		}
+		// 已存在且大小一致：跳过（幂等，重跑不重传大 tar）
+		if st, err := sc.Stat(remote); err == nil && st.Size() == info.Size() && !st.IsDir() {
+			if progress != nil {
+				progress(fmt.Sprintf("跳过（已存在）%s", rel))
+			}
+			return nil
+		}
+		if progress != nil {
+			progress(fmt.Sprintf("上传 %s (%s)", rel, humanSize(info.Size())))
+		}
+		if err := uploadFile(sc, p, remote, info.Mode().Perm()|0o600); err != nil {
+			return err
+		}
+		count++
+		total += info.Size()
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if progress != nil {
+		progress(fmt.Sprintf("目录上传完成：%d 个文件，共 %s → %s", count, humanSize(total), remoteDir))
+	}
+	return nil
+}
+
+func (c *sshClient) Exists(remotePath string) bool {
+	sc, err := sftp.NewClient(c.client)
+	if err != nil {
+		return false
+	}
+	defer sc.Close()
+	_, err = sc.Stat(remotePath)
+	return err == nil
+}
+
+func humanSize(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := int64(unit), 0
+	for m := n / unit; m >= unit; m /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(n)/float64(div), "KMGTPE"[exp])
 }
 
 func (c *sshClient) Close() error {
@@ -156,49 +284,6 @@ func (c *sshClient) Close() error {
 		return nil
 	}
 	return c.client.Close()
-}
-
-// DistributeSelf 将本机 wpgctl 二进制分发到各节点并远程执行命令。
-//
-// remoteArgs 例如: []string{"init", "--site", "/tmp/site.yaml", "--local"}
-func DistributeSelf(nodes []config.Node, password, privateKey, localBin, remoteBin string, remoteArgs []string) ([]NodeResult, error) {
-	if remoteBin == "" {
-		remoteBin = "/usr/local/bin/wpgctl"
-	}
-	results := make([]NodeResult, 0, len(nodes))
-	for _, n := range nodes {
-		r := NodeResult{Name: n.Name, IP: n.IP}
-		cli, err := DialNode(n, password, privateKey)
-		if err != nil {
-			r.OK = false
-			r.Message = err.Error()
-			results = append(results, r)
-			continue
-		}
-		if err := cli.Upload(localBin, remoteBin); err != nil {
-			_ = cli.Close()
-			r.OK = false
-			r.Message = "上传失败: " + err.Error()
-			results = append(results, r)
-			continue
-		}
-		cmd := remoteBin
-		for _, a := range remoteArgs {
-			cmd += " " + shellQuote(a)
-		}
-		out, err := cli.Run(cmd)
-		_ = cli.Close()
-		r.Output = out
-		if err != nil {
-			r.OK = false
-			r.Message = err.Error()
-		} else {
-			r.OK = true
-			r.Message = "ok"
-		}
-		results = append(results, r)
-	}
-	return results, nil
 }
 
 // NodeResult 单节点执行结果。

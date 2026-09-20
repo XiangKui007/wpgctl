@@ -28,6 +28,7 @@ type Options struct {
 	SitePath    string // 用于分发到远端的 site.yaml 路径
 	SSHPassword string
 	SSHKeyPath  string
+	Log         func(string) // 多机分发日志回调（UI 逐行回传）；为空则打印到终端
 }
 
 // Result 初始化结果摘要。
@@ -76,54 +77,87 @@ func Run(opts Options) (*Result, error) {
 	return res, nil
 }
 
+// distributeInit 多机：逐台从机上传 site.yaml + wpgctl + Docker 离线包，远程执行 `init --local`
+// （从机同样安装 Docker、建目录、放行防火墙）。日志逐行回传到 opts.Log。
 func distributeInit(opts Options, res *Result) error {
-	self, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("定位本机二进制失败: %w", err)
-	}
 	remoteNodes := remoteNodes(opts.Site.Nodes)
 	if len(remoteNodes) == 0 {
 		return nil
 	}
-	siteRemote := "/tmp/wpgctl-site.yaml"
-	// 远程节点仅做目录/防火墙等 init；Docker 离线包路径为主控机本地路径，不下发
-	args := []string{"init", "--site", siteRemote, "--local"}
-	// 先上传 site.yaml 到每台，再分发二进制执行
+	log := opts.Log
+	if log == nil {
+		log = func(s string) { util.Infof("%s", s) }
+	}
 	results := make([]sshx.NodeResult, 0, len(remoteNodes))
-	for _, n := range remoteNodes {
-		cli, err := sshx.DialNode(n, opts.SSHPassword, opts.SSHKeyPath)
-		if err != nil {
-			results = append(results, sshx.NodeResult{Name: n.Name, IP: n.IP, OK: false, Message: err.Error()})
-			continue
-		}
-		if opts.SitePath != "" {
-			if err := cli.Upload(opts.SitePath, siteRemote); err != nil {
-				_ = cli.Close()
-				results = append(results, sshx.NodeResult{Name: n.Name, IP: n.IP, OK: false, Message: "上传 site.yaml: " + err.Error()})
-				continue
-			}
-		}
-		_ = cli.Close()
-	}
-	dist, err := sshx.DistributeSelf(remoteNodes, opts.SSHPassword, opts.SSHKeyPath, self, "/usr/local/bin/wpgctl", args)
-	if err != nil {
-		return err
-	}
-	results = append(results, dist...)
-	res.NodeResults = results
 	fail := 0
-	for _, r := range results {
-		if !r.OK {
+	for _, n := range remoteNodes {
+		r := sshx.NodeResult{Name: n.Name, IP: n.IP}
+		err := initOneRemote(opts, n, log)
+		if err != nil {
+			r.OK = false
+			r.Message = err.Error()
 			fail++
 			util.Errorf("节点 %s(%s) 失败: %s", r.Name, r.IP, r.Message)
 		} else {
+			r.OK = true
+			r.Message = "ok"
 			util.Successf("节点 %s(%s) init 完成", r.Name, r.IP)
 		}
+		results = append(results, r)
 	}
+	res.NodeResults = results
 	if fail > 0 {
 		return fmt.Errorf("%d/%d 节点失败", fail, len(results))
 	}
 	return nil
+}
+
+func initOneRemote(opts Options, n config.Node, log func(string)) error {
+	log(fmt.Sprintf("—— 从机 %s (%s) 开始初始化 ——", n.Name, n.IP))
+	sess, err := sshx.Open(n, opts.SSHPassword, opts.SSHKeyPath, log)
+	if err != nil {
+		return err
+	}
+	defer sess.Close()
+
+	if err := sess.UploadSite(opts.SitePath); err != nil {
+		return err
+	}
+	if err := sess.EnsureBinary(""); err != nil {
+		return err
+	}
+	args := []string{"init", "--site", sshx.RemoteSitePath, "--local"}
+	dockerDir := strings.TrimSpace(opts.DockerPackage)
+	if dockerDir == "" && opts.BasePackage != "" {
+		for _, p := range []string{
+			filepath.Join(opts.BasePackage, "docker_package", "docker_package"),
+			filepath.Join(opts.BasePackage, "docker_package"),
+		} {
+			if IsLegacyDockerPackage(p) {
+				dockerDir = p
+				break
+			}
+		}
+	}
+	if dockerDir != "" && util.DirExists(dockerDir) {
+		// 从机若已有 docker 直接跳过上传（远端 init 也会再判断一次）
+		if out, err := sess.Client.Run("docker version --format '{{.Server.Version}}' 2>/dev/null"); err == nil && strings.TrimSpace(out) != "" {
+			log(fmt.Sprintf("从机已安装 Docker %s，跳过离线包上传", strings.TrimSpace(out)))
+		} else {
+			remoteDocker := sshx.RemoteDirFor(dockerDir)
+			if sess.Client.Exists(remoteDocker) {
+				log("从机已存在 Docker 离线包目录 " + remoteDocker + "，跳过上传")
+			} else if err := sess.SyncDir(dockerDir, remoteDocker); err != nil {
+				return fmt.Errorf("上传 Docker 离线包: %w", err)
+			}
+			args = append(args, "--docker-package", remoteDocker)
+		}
+	} else {
+		log("未提供 Docker 离线包：从机仅做目录 / 防火墙 / 内核参数初始化（需已自带 Docker）")
+	}
+	return sess.RunWpgctl(args, func(line string) {
+		log("[" + n.Name + "] " + line)
+	})
 }
 
 func ensureDirs(site *config.SiteConfig, res *Result) error {
@@ -238,8 +272,8 @@ func ensureDocker(opts Options, res *Result) error {
 		_ = exec.Command("systemctl", "enable", "--now", "docker").Run()
 	}
 
-	// daemon.json
-	dataRoot := filepath.Join(opts.Site.Paths.Workspace, "docker-data")
+	// daemon.json 与 docker.service --graph 同一数据目录
+	dataRoot := DockerDataRoot(opts.Site)
 	_ = util.EnsureDir(dataRoot)
 	daemonJSON := fmt.Sprintf(`{
   "data-root": "%s",

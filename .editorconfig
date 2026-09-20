@@ -1,0 +1,18 @@
+# 对齐阿里巴巴手册：UTF-8、换行、缩进；Go 以 gofmt（tab）为准。
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+[*.go]
+indent_style = tab
+
+[*.{js,vue,css,html,json,yml,yaml,md}]
+indent_style = space
+indent_size = 2
+
+[*.md]
+trim_trailing_whitespace = false

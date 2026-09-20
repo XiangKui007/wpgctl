@@ -16,13 +16,13 @@ import (
 
 // FSEntry 目录浏览条目。
 type FSEntry struct {
-	Name        string `json:"name"`
-	Path        string `json:"path"`
-	IsDir       bool   `json:"isDir"`
-	HasManifest    bool `json:"hasManifest,omitempty"`    // 目录内是否含 manifest.yaml
-	HasDockerInstall bool `json:"hasDockerInstall,omitempty"` // 含 offline_install_docker.sh
-	IsArchive   bool   `json:"isArchive,omitempty"`     // .zip / .tar / .tar.gz
-	ArchiveKind string `json:"archiveKind,omitempty"`   // zip | tar | tar.gz
+	Name             string `json:"name"`
+	Path             string `json:"path"`
+	IsDir            bool   `json:"isDir"`
+	HasManifest      bool   `json:"hasManifest,omitempty"`      // 目录内是否含 manifest.yaml
+	HasDockerInstall bool   `json:"hasDockerInstall,omitempty"` // 含 offline_install_docker.sh
+	IsArchive        bool   `json:"isArchive,omitempty"`        // .zip / .tar / .tar.gz
+	ArchiveKind      string `json:"archiveKind,omitempty"`      // zip | tar | tar.gz
 }
 
 // FSListResult 目录列表结果。
@@ -35,7 +35,9 @@ type FSListResult struct {
 
 // listFS 列出目录内容，供网页路径选择器使用。
 //
-// mode: "dir" 只返回目录；"file" 返回目录+文件；"yaml" 返回目录+yaml/yml。
+// mode: "dir" 只返回目录；"file" 返回目录+文件；"yaml" 返回目录+yaml/yml；
+// "nacos-zip" 返回目录 + 文件名以 nacos 开头的 .zip（排除 .tar.zip）；
+// "sql" 返回目录 + .sql 文件。
 func listFS(path, mode string) (*FSListResult, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
@@ -84,6 +86,16 @@ func listFS(path, mode string) (*FSListResult, error) {
 					continue
 				}
 			}
+			if mode == "nacos-zip" {
+				if !isNacosConfigZipName(name) {
+					continue
+				}
+			}
+			if mode == "sql" {
+				if !strings.HasSuffix(strings.ToLower(name), ".sql") {
+					continue
+				}
+			}
 		}
 		entry := FSEntry{Name: name, Path: full, IsDir: isDir}
 		if isDir {
@@ -124,6 +136,17 @@ func archiveKind(name string) string {
 	default:
 		return ""
 	}
+}
+
+func isNacosConfigZipName(name string) bool {
+	lower := strings.ToLower(name)
+	if !strings.HasPrefix(lower, "nacos") {
+		return false
+	}
+	if strings.HasSuffix(lower, ".tar.zip") {
+		return false
+	}
+	return strings.HasSuffix(lower, ".zip")
 }
 
 func listRoots() (*FSListResult, error) {

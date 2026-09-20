@@ -12,8 +12,8 @@ import (
 
 	"github.com/wpg/wpgctl/internal/config"
 	"github.com/wpg/wpgctl/internal/pack"
-	"github.com/wpg/wpgctl/internal/status"
 	"github.com/wpg/wpgctl/internal/state"
+	"github.com/wpg/wpgctl/internal/status"
 	"github.com/wpg/wpgctl/internal/util"
 )
 
@@ -38,6 +38,21 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		if body.Scenario != "windows" {
 			body.Scenario = "linux"
 		}
+		if prev, err := state.LoadSettings(); err == nil && prev != nil {
+			if body.FieldPaths == nil {
+				// 未携带 fieldPaths 的旧调用：保留已持久化的路径
+				body.FieldPaths = prev.FieldPaths
+			}
+			if body.Preflight == nil {
+				body.Preflight = prev.Preflight
+			}
+			if body.UISession == nil {
+				body.UISession = prev.UISession
+			}
+		}
+		if body.Preflight != nil {
+			normalizePreflight(body.Preflight)
+		}
 		if err := state.SaveSettings(&body); err != nil {
 			s.writeJSON(w, 500, map[string]string{"error": err.Error()})
 			return
@@ -48,13 +63,36 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func normalizePreflight(p *state.PreflightSettings) {
+	switch p.Scale {
+	case "dual", "multi", "single":
+	default:
+		p.Scale = "dual"
+	}
+	switch p.Login {
+	case "root", "sudo", "unsure":
+	default:
+		p.Login = "root"
+	}
+	switch p.Workspace {
+	case "fresh", "ready", "unknown":
+	default:
+		p.Workspace = "fresh"
+	}
+	switch p.PackageSync {
+	case "auto", "already":
+	default:
+		p.PackageSync = "auto"
+	}
+}
+
 // PackageInfo 本地包仓库条目。
 type PackageInfo struct {
-	Name    string `json:"name"`
-	Path    string `json:"path"`
-	Kind    string `json:"kind"`
-	Version string `json:"version"`
-	HasManifest bool `json:"hasManifest"`
+	Name        string `json:"name"`
+	Path        string `json:"path"`
+	Kind        string `json:"kind"`
+	Version     string `json:"version"`
+	HasManifest bool   `json:"hasManifest"`
 }
 
 func (s *Server) handlePackages(w http.ResponseWriter, r *http.Request) {
@@ -167,12 +205,12 @@ func (s *Server) handlePackageScan(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.writeJSON(w, 200, map[string]any{
-		"images":      res.Images,
-		"yaml":        res.YAML,
-		"warnings":    res.Warnings,
-		"written":     body.Write,
+		"images":       res.Images,
+		"yaml":         res.YAML,
+		"warnings":     res.Warnings,
+		"written":      body.Write,
 		"manifestPath": outPath,
-		"count":       len(res.Images),
+		"count":        len(res.Images),
 	})
 }
 

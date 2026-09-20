@@ -9,10 +9,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/wpg/wpgctl/internal/config"
-	"github.com/wpg/wpgctl/internal/docker"
+	dockerx "github.com/wpg/wpgctl/internal/docker"
 	"github.com/wpg/wpgctl/internal/precheck"
 	"github.com/wpg/wpgctl/internal/state"
 	"github.com/wpg/wpgctl/internal/util"
@@ -21,8 +23,67 @@ import (
 // ServiceListResult 服务状态查询结果。
 type ServiceListResult struct {
 	Services []dockerx.ComposeService `json:"services"`
-	Source   string                   `json:"source,omitempty"` // rendered | docker
+	Nodes    []NodeSnapshot           `json:"nodes,omitempty"`
+	Source   string                   `json:"source,omitempty"` // rendered | docker | cluster
 	Warning  string                   `json:"warning,omitempty"`
+	Running  int                      `json:"running"`
+	Stopped  int                      `json:"stopped"`
+	Total    int                      `json:"total"`
+}
+
+// NodeSnapshot 一台 Docker 主机的汇总（本机或 SSH 从机）。
+type NodeSnapshot struct {
+	Name    string `json:"name"`
+	IP      string `json:"ip"`
+	Local   bool   `json:"local"`
+	Error   string `json:"error,omitempty"`
+	Running int    `json:"running"`
+	Stopped int    `json:"stopped"`
+	Total   int    `json:"total"`
+}
+
+func summarizeServices(list []dockerx.ComposeService) (running, stopped int) {
+	for _, s := range list {
+		if containerRunning(s) {
+			running++
+		} else {
+			stopped++
+		}
+	}
+	return running, stopped
+}
+
+func containerRunning(s dockerx.ComposeService) bool {
+	st := strings.ToLower(strings.TrimSpace(s.State))
+	if st == "running" || st == "up" {
+		return true
+	}
+	status := strings.ToLower(s.Status)
+	return strings.HasPrefix(status, "up")
+}
+
+func sortServices(list []dockerx.ComposeService) {
+	sort.SliceStable(list, func(i, j int) bool {
+		if list[i].Local != list[j].Local {
+			return list[i].Local
+		}
+		if list[i].NodeIP != list[j].NodeIP {
+			return list[i].NodeIP < list[j].NodeIP
+		}
+		ri, rj := containerRunning(list[i]), containerRunning(list[j])
+		if ri != rj {
+			return ri
+		}
+		ni := list[i].Service
+		if ni == "" {
+			ni = list[i].Name
+		}
+		nj := list[j].Service
+		if nj == "" {
+			nj = list[j].Name
+		}
+		return ni < nj
+	})
 }
 
 // QueryServices 查询运行状态：优先 rendered compose，否则回退 docker ps（现场逐步部署）。
@@ -37,8 +98,11 @@ func QueryServices(composeRoot string) (ServiceListResult, error) {
 			file := filepath.Base(composeFile)
 			list, err := d.ComposePs(dir, file)
 			if err == nil && len(list) > 0 {
+				sortServices(list)
+				run, stop := summarizeServices(list)
 				out.Services = list
 				out.Source = "rendered"
+				out.Running, out.Stopped, out.Total = run, stop, len(list)
 				return out, nil
 			}
 		}
@@ -48,8 +112,11 @@ func QueryServices(composeRoot string) (ServiceListResult, error) {
 	if err != nil {
 		return out, err
 	}
+	sortServices(list)
+	run, stop := summarizeServices(list)
 	out.Services = list
 	out.Source = "docker"
+	out.Running, out.Stopped, out.Total = run, stop, len(list)
 	if len(list) == 0 {
 		out.Warning = "未发现运行中的容器。若使用现场逐步部署，请确认各模块 compose up 已执行。"
 	} else {

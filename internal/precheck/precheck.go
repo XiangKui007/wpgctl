@@ -274,7 +274,7 @@ func checkWindowsComposeTips() Item {
 	return Item{
 		Name:     "Windows 提示",
 		Severity: SeverityYellow,
-		Message:  "Docker Desktop 不支持 Linux 的 network_mode:host；若包内大量 host 网络，请改用 bridge+端口映射，或在 WSL2/Linux 主控机部署。paths 请用本机路径如 D:/workspace/waterwork",
+		Message:  "Docker Desktop 不支持 Linux 的 network_mode:host；若包内大量 host 网络，请改用 bridge+端口映射，或在 WSL2/Linux 主控机部署。paths 请用本机路径如 D:/workspace",
 	}
 }
 

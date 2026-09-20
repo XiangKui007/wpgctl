@@ -1,0 +1,45 @@
+---
+description: 阿里巴巴前端规约在 Vue 3 + Element Plus 控制台的落地
+globs: web/src/**/*.{js,vue,css}
+alwaysApply: false
+---
+
+# Vue / JS（对齐阿里巴巴前端规约）
+
+UTF-8。`const` / `let`，禁止 `var`。用 `===` / `!==`。2 空格缩进。路径别名 `@` → `web/src`。
+
+## 命名
+
+- 组件文件多词，PascalCase（如 `YamlEditor.vue`）。
+- 方法/变量 camelCase；常量 UPPER_SNAKE 或模块级只读 `VIEWS`。
+- 事件/自定义属性在模板里 kebab-case。布尔 prop、data 用 `is`/`has` 前缀。
+
+## 目录（工程分包）
+
+| 目录 | 职责 |
+| --- | --- |
+| `api/` | HTTP 封装 |
+| `assets/styles/` | 全局样式（index.css 入口） |
+| `components/` | 跨页组件 |
+| `composables/` | 会话工厂与 `useConsole()` |
+| `constants/` | 向导目录、默认凭据 |
+| `router/` | hash 路由；`helpers.js` 无页面依赖；`routes.js` 懒加载分包 |
+| `utils/` | 纯函数、草稿存储 |
+| `views/` | 页面；向导步骤在 `views/wizard/` |
+
+- `App.vue` 只保留壳、`provide` 与 `<router-view>`。
+- 路由 hash（`#/status`、`#/wizard/0/1`）；草稿 `localStorage`，SSH 密码 `sessionStorage`（`utils/storage.js`）。
+- JSON 请求走 `api/http.js` 的 `api()`。
+- 禁止修改 prop；`v-for` 与 `v-if` 不写在同一元素；列表 `key` 用稳定 id。
+- 用户可见文案用中文。交互用 Element Plus，不要再加一套自定义按钮/弹窗。
+
+## 注释与函数
+
+- `export` 函数补 JSDoc；非显然的 watcher/防抖写清「为什么是这个间隔」。
+- 函数单一职责；模板里不堆复杂表达式，抽 `computed` / method。
+
+## 错误与请求
+
+- `fetch` 必须处理非 2xx 与网络失败，用 `ElMessage` 给现场看懂的中文。
+- 禁止空 `catch`。写操作二次确认用 `ElMessageBox.confirm`。
+- 输入防抖走 `utils/storage.js` 的 `debounce`。

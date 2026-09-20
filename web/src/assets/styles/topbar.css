@@ -1,0 +1,345 @@
+/** 顶栏、主导航、环境开关。 */
+/* —— Topbar —— */
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  background: rgba(255, 255, 255, 0.94);
+  border-bottom: 1px solid var(--line);
+  backdrop-filter: blur(14px);
+}
+
+.chrome {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  max-width: var(--page);
+  margin: 0 auto;
+  padding: 0.55rem 1.5rem 0.35rem;
+  width: 100%;
+}
+
+.brand-mark {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  min-width: 8.5rem;
+}
+
+.mark {
+  width: 1.7rem;
+  height: 1.7rem;
+  border-radius: 6px;
+  background: linear-gradient(160deg, #2ee0c8, #0c9b8a 52%, #08665c);
+  box-shadow: 0 2px 8px rgba(12, 155, 138, 0.38);
+  flex-shrink: 0;
+}
+
+.brand-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.05rem;
+  line-height: 1.15;
+}
+
+.brand-mark strong {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 0.98rem;
+  letter-spacing: 0.06em;
+}
+
+.brand-mark span {
+  color: var(--ink-soft);
+  font-size: 0.72rem;
+}
+
+.topbar-tools {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.55rem;
+}
+
+.env-chip {
+  font-size: 0.78rem;
+  color: var(--water-deep);
+}
+
+.env-chip.warn {
+  color: var(--warn);
+}
+
+.settings-item {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.82rem;
+  color: var(--ink-soft);
+}
+
+.settings-item input[type="text"],
+.settings-item input:not([type]) {
+  width: 7rem;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  padding: 0.25rem 0;
+  outline: none;
+}
+
+.settings-item input:focus {
+  border-bottom-color: var(--water);
+}
+
+.privacy-toggle,
+.local-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  cursor: pointer;
+  user-select: none;
+  font-size: 0.82rem;
+  color: var(--ink-soft);
+}
+
+.privacy-toggle input {
+  accent-color: var(--water);
+}
+
+.local-switch input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.switch-track {
+  width: 2.2rem;
+  height: 1.2rem;
+  border-radius: 999px;
+  background: #d7e3e1;
+  position: relative;
+  transition: background 0.2s ease;
+}
+
+.switch-track::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 0.9rem;
+  height: 0.9rem;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(21, 36, 40, 0.15);
+  transition: transform 0.2s ease;
+}
+
+.local-switch input:checked + .switch-track {
+  background: var(--water);
+}
+
+.local-switch input:checked + .switch-track::after {
+  transform: translateX(1rem);
+}
+
+.mode-local .wave-panel {
+  background: linear-gradient(145deg, #0e5a62, #163038 70%);
+}
+
+.nav-row {
+  display: flex;
+  align-items: stretch;
+  max-width: var(--page);
+  margin: 0 auto;
+  padding: 0 1.5rem;
+  width: 100%;
+}
+
+.app-nav {
+  flex: 1;
+  min-width: 0;
+  border-bottom: 0 !important;
+  background: transparent !important;
+}
+
+.app-nav.el-menu--horizontal {
+  --el-menu-bg-color: transparent;
+  --el-menu-text-color: var(--ink-soft);
+  --el-menu-active-color: var(--water-deep);
+  --el-menu-hover-bg-color: transparent;
+  --el-menu-hover-text-color: var(--water-deep);
+  --el-menu-item-height: 40px;
+  --el-menu-horizontal-height: 40px;
+  display: flex !important;
+  align-items: center;
+}
+
+.app-nav.el-menu--horizontal .el-menu-item {
+  float: none;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  height: 40px;
+  line-height: 40px;
+  font-weight: 500;
+  font-size: 0.9rem;
+  padding: 0 0.85rem;
+  margin: 0;
+  border-bottom: 2px solid transparent !important;
+}
+
+.app-nav.el-menu--horizontal .el-menu-item .el-icon {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.app-nav.el-menu--horizontal .el-menu-item:hover {
+  background: transparent !important;
+  color: var(--water-deep);
+}
+
+.app-nav.el-menu--horizontal .el-menu-item.is-active {
+  font-weight: 700;
+  color: var(--water-deep);
+  background: transparent !important;
+  border-bottom-color: var(--water) !important;
+}
+
+.tool-switches {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem 0.85rem;
+  padding: 0.15rem 0.7rem;
+  background: #f3f7f6;
+  border-radius: 999px;
+}
+
+.topbar .operator-input {
+  width: 6.8rem;
+}
+
+.topbar .operator-input .el-input__wrapper {
+  background: #f3f7f6;
+  box-shadow: none;
+  border-radius: 999px;
+}
+
+.topbar .operator-input .el-input__wrapper:hover,
+.topbar .operator-input .el-input__wrapper.is-focus {
+  box-shadow: 0 0 0 1px var(--water-deep) inset;
+}
+
+.topbar .env-tag {
+  max-width: 13rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border: 0;
+}
+
+.topbar .el-switch__label {
+  color: var(--ink-soft);
+  font-size: 0.75rem;
+}
+
+.topbar .el-switch__label.is-active {
+  color: var(--water-deep);
+}
+
+.topbar .el-tag {
+  max-width: 14rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.diag-btn {
+  --el-button-bg-color: #f3f7f6;
+  --el-button-border-color: transparent;
+  --el-button-hover-bg-color: var(--water-soft);
+  --el-button-hover-border-color: transparent;
+  --el-button-hover-text-color: var(--water-deep);
+  --el-button-text-color: var(--ink-soft);
+}
+
+.field .el-input,
+.field .el-select,
+.path-row .el-input {
+  width: 100%;
+}
+
+.path-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.status-search {
+  flex: 1;
+}
+
+.picker-dialog .fs-list {
+  max-height: 360px;
+}
+
+.nav button,
+.nav-quiet {
+  border: 0;
+  background: transparent;
+  color: #8a9ca3;
+  padding: 0.5rem 0.85rem;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.92rem;
+  font-weight: 400;
+  position: relative;
+  border-radius: 6px;
+  transition: color 0.15s ease, background 0.15s ease, font-weight 0.15s ease;
+}
+
+.nav button:hover,
+.nav-quiet:hover {
+  color: var(--ink);
+  background: rgba(21, 36, 40, 0.04);
+}
+
+.nav button.active {
+  color: var(--water-deep);
+  font-weight: 700;
+  background: var(--water-soft);
+}
+
+.nav button.active::after {
+  content: none;
+}
+
+.nav button:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+  background: transparent;
+}
+
+.nav-quiet {
+  font-size: 0.82rem !important;
+  color: #8a9ca3;
+}
+
+.nav-sep {
+  display: inline-block;
+  width: 1px;
+  height: 1.1rem;
+  margin: 0 0.35rem;
+  background: var(--line);
+  align-self: center;
+}
+
+.nav-tools {
+  display: flex;
+  align-items: center;
+  gap: 0.15rem;
+}

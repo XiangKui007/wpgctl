@@ -104,3 +104,26 @@ func fileExists(p string) bool {
 	_, err := os.Stat(p)
 	return err == nil
 }
+
+func TestUnwrapTarZipIfNeeded(t *testing.T) {
+	dir := t.TempDir()
+	zipPath := filepath.Join(dir, "java8.tar.zip")
+	if err := writeTarZip(zipPath, []byte("java8-tar")); err != nil {
+		t.Fatal(err)
+	}
+	dest, err := UnwrapTarZipIfNeeded(zipPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(dir, "java8.tar")
+	if dest != want {
+		t.Fatalf("got %q want %q", dest, want)
+	}
+	if !fileExists(want) {
+		t.Fatal("java8.tar not created")
+	}
+	again, err := UnwrapTarZipIfNeeded(zipPath)
+	if err != nil || again != want {
+		t.Fatalf("idempotent: %v %q", err, again)
+	}
+}

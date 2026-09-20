@@ -59,6 +59,7 @@ func init() {
 	rootCmd.AddCommand(newDiagCmd())
 	rootCmd.AddCommand(newPackCmd())
 	rootCmd.AddCommand(newRenderCmd())
+	rootCmd.AddCommand(newModuleCmd())
 	rootCmd.AddCommand(newUICmd())
 	rootCmd.AddCommand(newEncryptCmd())
 }

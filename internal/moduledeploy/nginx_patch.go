@@ -1,9 +1,13 @@
 package moduledeploy
 
 import (
+	"errors"
 	"fmt"
+	"path/filepath"
+	"strings"
 
 	"github.com/wpg/wpgctl/internal/fetch"
+	"github.com/wpg/wpgctl/internal/util"
 )
 
 // NginxPatchOptions nginx 模块现场部署：模块 tar load → html zip → 改 conf → compose up。
@@ -12,6 +16,7 @@ type NginxPatchOptions struct {
 	ExpandArchives bool
 	ProxyIPs       NginxProxyIPs
 	ComposeUp      bool
+	SkipProxyPatch bool // true：不改 conf 内 proxy_pass IP（由用户手工编辑保存）
 }
 
 // NginxPatchResult nginx 步骤执行摘要。
@@ -27,9 +32,21 @@ type NginxPatchResult struct {
 // RunNginxPatch 执行 nginx 模块完整现场流程。
 func RunNginxPatch(opts NginxPatchOptions) (*NginxPatchResult, error) {
 	moduleDir := opts.Layout.ModuleDir
+	if found := FindNginxModuleDir(moduleDir); found != "" {
+		moduleDir = found
+	} else if strings.EqualFold(filepath.Base(moduleDir), "nginx") {
+		if alt := ModulePath(filepath.Dir(moduleDir), "nginx"); util.DirExists(alt) {
+			moduleDir = alt
+		}
+	}
+	opts.Layout.ModuleDir = moduleDir
+	if opts.Layout.HTMLDir == "" || !util.DirExists(opts.Layout.HTMLDir) {
+		opts.Layout.HTMLDir = filepath.Join(moduleDir, "html")
+	}
 	out := &NginxPatchResult{
 		WebConf: opts.Layout.WebConf,
 		HTMLDir: opts.Layout.HTMLDir,
+		Steps:   []string{"nginx 模块目录: " + moduleDir},
 	}
 
 	var loadedRefs []string
@@ -37,11 +54,15 @@ func RunNginxPatch(opts NginxPatchOptions) (*NginxPatchResult, error) {
 		steps, err := PrepareModuleArchives(moduleDir)
 		out.Steps = append(out.Steps, steps...)
 		if err != nil {
-			tars, _ := findImageTars(moduleDir)
-			if len(tars) == 0 {
-				return out, fmt.Errorf("解压 nginx 模块失败: %w", err)
+			if errors.Is(err, fetch.ErrNoArchivesFound) {
+				out.Steps = append(out.Steps, "模块目录无 zip/tar（多半已展开过），跳过解压")
+			} else {
+				tars, _ := findImageTars(moduleDir)
+				if len(tars) == 0 {
+					return out, fmt.Errorf("解压 nginx 模块失败: %w", err)
+				}
+				out.Steps = append(out.Steps, "模块目录无新压缩包，沿用已有 .tar")
 			}
-			out.Steps = append(out.Steps, "模块目录无新压缩包，沿用已有 .tar")
 		}
 
 		htmlRes, err := ExpandNginxHTML(opts.Layout.HTMLDir)
@@ -55,19 +76,28 @@ func RunNginxPatch(opts NginxPatchOptions) (*NginxPatchResult, error) {
 			out.Steps = append(out.Steps, "html 无待解压 zip（已跳过）")
 		}
 
-		loadRes, err := Run(Options{ModuleDir: moduleDir, Load: true})
+		tars, _ := findImageTars(moduleDir)
+		if len(tars) == 0 {
+			out.Steps = append(out.Steps, "未发现镜像 .tar，跳过 docker load（使用本机已有镜像）")
+		} else {
+			loadRes, err := Run(Options{ModuleDir: moduleDir, Load: true})
+			if err != nil {
+				return out, err
+			}
+			out.Steps = append(out.Steps, loadRes.Steps...)
+			loadedRefs = append(loadedRefs, loadRes.LoadedRefs...)
+		}
+	}
+
+	if opts.SkipProxyPatch {
+		out.Steps = append(out.Steps, "跳过 proxy_pass IP 同步（使用已保存的 conf）")
+	} else {
+		notes, err := PatchHTTPWeb8877(opts.Layout.WebConf, opts.ProxyIPs)
 		if err != nil {
 			return out, err
 		}
-		out.Steps = append(out.Steps, loadRes.Steps...)
-		loadedRefs = append(loadedRefs, loadRes.LoadedRefs...)
+		out.ProxyNotes = notes
 	}
-
-	notes, err := PatchHTTPWeb8877(opts.Layout.WebConf, opts.ProxyIPs)
-	if err != nil {
-		return out, err
-	}
-	out.ProxyNotes = notes
 
 	if opts.ComposeUp {
 		composeRes, err := Run(Options{

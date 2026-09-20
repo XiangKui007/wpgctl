@@ -45,6 +45,8 @@ type Node struct {
 	IP    string   `yaml:"ip" json:"ip"`
 	SSH   SSHAuth  `yaml:"ssh" json:"ssh"`
 	Roles []string `yaml:"roles" json:"roles"`
+	// Services 记录表单分配到本机的具体服务；Roles 保留用于兼容部署编排。
+	Services []string `yaml:"services,omitempty" json:"services,omitempty"`
 }
 
 // SSHAuth SSH 连接参数（密码运行时交互或密钥，不强制写入文件）。
@@ -101,7 +103,7 @@ type Override struct {
 
 // PathsConfig 现场路径规划。
 type PathsConfig struct {
-	Workspace        string `yaml:"workspace" json:"workspace"`
+	Workspace        string `yaml:"workspace" json:"workspace"` // 挂载盘工作簿根，现场默认 /workspace
 	Logs             string `yaml:"logs,omitempty" json:"logs,omitempty"` // 可选；各模块 compose 通常已挂载日志目录
 	NginxHTML        string `yaml:"nginxHtml" json:"nginxHtml"`
 	Waterwork        string `yaml:"waterwork,omitempty" json:"waterwork,omitempty"`               // 市政水厂包目录，如 waterwork-4.1.1
@@ -114,18 +116,18 @@ type PathsConfig struct {
 
 // Manifest 交付包清单，驱动 deploy / upgrade / status 等全部行为。
 type Manifest struct {
-	Kind         string        `yaml:"kind"`
-	Version      string        `yaml:"version"`
-	RequiresBase string        `yaml:"requiresBase,omitempty"`
-	BaseRelease  string        `yaml:"baseRelease,omitempty"` // patch 包基线 release
-	Arch         []string      `yaml:"arch"`
-	MinCPU       int           `yaml:"minCpu,omitempty"`
-	MinMemGB     int           `yaml:"minMemGb,omitempty"`
-	MinDiskGB    int           `yaml:"minDiskGb,omitempty"`
-	Services     []ServiceSpec `yaml:"services"`
+	Kind         string         `yaml:"kind"`
+	Version      string         `yaml:"version"`
+	RequiresBase string         `yaml:"requiresBase,omitempty"`
+	BaseRelease  string         `yaml:"baseRelease,omitempty"` // patch 包基线 release
+	Arch         []string       `yaml:"arch"`
+	MinCPU       int            `yaml:"minCpu,omitempty"`
+	MinMemGB     int            `yaml:"minMemGb,omitempty"`
+	MinDiskGB    int            `yaml:"minDiskGb,omitempty"`
+	Services     []ServiceSpec  `yaml:"services"`
 	Frontend     []FrontendSpec `yaml:"frontend,omitempty"`
-	SQL          []SQLSpec     `yaml:"sql,omitempty"`
-	ServicesList []string      `yaml:"servicesList,omitempty"` // patch 涉及服务名
+	SQL          []SQLSpec      `yaml:"sql,omitempty"`
+	ServicesList []string       `yaml:"servicesList,omitempty"` // patch 涉及服务名
 }
 
 // ServiceSpec 单个服务规格。
@@ -144,10 +146,10 @@ type ServiceSpec struct {
 
 // HealthSpec 健康检查规格。
 type HealthSpec struct {
-	Type       string `yaml:"type"` // http / tcp / none
-	Path       string `yaml:"path,omitempty"`
-	TimeoutSec int    `yaml:"timeoutSec,omitempty"`
-	IntervalSec int   `yaml:"intervalSec,omitempty"`
+	Type        string `yaml:"type"` // http / tcp / none
+	Path        string `yaml:"path,omitempty"`
+	TimeoutSec  int    `yaml:"timeoutSec,omitempty"`
+	IntervalSec int    `yaml:"intervalSec,omitempty"`
 }
 
 // FrontendSpec 前端静态包规格。
@@ -515,4 +517,3 @@ func (m *Manifest) Ports(profiles []string) []int {
 	}
 	return ports
 }
-

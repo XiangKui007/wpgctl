@@ -16,7 +16,29 @@ type UISettings struct {
 	Operator    string `json:"operator"`    // 操作者署名
 	PrivacyMode bool   `json:"privacyMode"` // 投屏模式：隐藏敏感
 	Scenario    string `json:"scenario"`    // windows=本机Docker | linux=现场交付（默认）
-	UpdatedAt   time.Time `json:"updatedAt"`
+	// AdvancedMode 显示一键式部署入口（包中心 / 升级 / 交付单 / 验收报告）。
+	AdvancedMode bool `json:"advancedMode"`
+	// FieldPaths 现场向导中不属于 site.yaml 的本机路径（middleware/platform 根目录、Docker 离线包、
+	// nacos 配置目录、nginx 目录等），按 key/value 持久化，重开控制台后无需重填。
+	FieldPaths map[string]string `json:"fieldPaths,omitempty"`
+	// Preflight 部署开始前决策（规模 / 登录方式 / 工作簿状态），现场以多机为常态。
+	Preflight *PreflightSettings `json:"preflight,omitempty"`
+	// UISession 前端会话（当前页、向导进度、未写入 site.yaml 的草稿索引），刷新后恢复。
+	UISession map[string]any `json:"uiSession,omitempty"`
+	UpdatedAt time.Time      `json:"updatedAt"`
+}
+
+// PreflightSettings 「开始前」页结论，驱动向导默认拓扑与 Init 是否可跳过。
+type PreflightSettings struct {
+	// Scale: dual=常用双机 | multi=三机及以上 | single=本机联调/极小规模
+	Scale string `json:"scale"`
+	// Login: root=可直接 root SSH | sudo=普通用户+非交互 sudo | unsure=未确认
+	Login string `json:"login"`
+	// Workspace: fresh=未初始化 | ready=已初始化路径清楚 | unknown=不确定
+	Workspace string `json:"workspace"`
+	// PackageSync: auto=缺目录自动上传 | already=各机已同路径拷好
+	PackageSync string `json:"packageSync"`
+	Completed   bool   `json:"completed"`
 }
 
 // SettingsPath 返回设置文件路径。

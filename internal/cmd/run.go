@@ -8,10 +8,10 @@ import (
 	"github.com/wpg/wpgctl/internal/config"
 	"github.com/wpg/wpgctl/internal/db"
 	"github.com/wpg/wpgctl/internal/deploy"
-	fw "github.com/wpg/wpgctl/internal/firewall"
-	"github.com/wpg/wpgctl/internal/moduledeploy"
 	"github.com/wpg/wpgctl/internal/fetch"
+	fw "github.com/wpg/wpgctl/internal/firewall"
 	"github.com/wpg/wpgctl/internal/initenv"
+	"github.com/wpg/wpgctl/internal/moduledeploy"
 	"github.com/wpg/wpgctl/internal/nacos"
 	"github.com/wpg/wpgctl/internal/pack"
 	"github.com/wpg/wpgctl/internal/render"
@@ -102,12 +102,33 @@ func runDBApply(sitePath, packageDir string, dryRun bool) error {
 	return err
 }
 
-func runNacosImport(sitePath, configDir string) error {
+func runDBApplyFiles(sitePath string, files []string, driver, database string, dryRun bool) error {
 	site, err := config.LoadSite(sitePath)
 	if err != nil {
 		return err
 	}
-	_, err = nacos.Run(nacos.Options{Site: site, ConfigDir: configDir})
+	if dryRun {
+		for _, f := range files {
+			fmt.Printf("  %s\n", f)
+		}
+		return nil
+	}
+	_, err = db.ApplyFiles(db.FileOptions{
+		Site:     site,
+		Files:    files,
+		Driver:   driver,
+		Database: database,
+		Log:      func(s string) { util.Infof("%s", s) },
+	})
+	return err
+}
+
+func runNacosImport(sitePath, configDir string, configZips []string) error {
+	site, err := config.LoadSite(sitePath)
+	if err != nil {
+		return err
+	}
+	_, err = nacos.Run(nacos.Options{Site: site, ConfigDir: configDir, ConfigZips: configZips})
 	return err
 }
 

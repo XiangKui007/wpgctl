@@ -136,6 +136,25 @@ func ExpandArchivesOptional(root string) (*ExpandResult, error) {
 	return res, err
 }
 
+// UnwrapTarZipIfNeeded 将 .tar.zip 展开为同目录 .tar（已存在则跳过）。现场 java8.tar.zip 用这个。
+func UnwrapTarZipIfNeeded(zipPath string) (string, error) {
+	zipPath = strings.TrimSpace(zipPath)
+	if zipPath == "" {
+		return "", fmt.Errorf("zip 路径为空")
+	}
+	dest := strings.TrimSuffix(zipPath, ".zip")
+	if !strings.HasSuffix(strings.ToLower(zipPath), ".tar.zip") {
+		return "", fmt.Errorf("不是 .tar.zip: %s", filepath.Base(zipPath))
+	}
+	if util.FileExists(dest) {
+		return dest, nil
+	}
+	if err := unwrapTarZip(zipPath, dest); err != nil {
+		return "", err
+	}
+	return dest, nil
+}
+
 func dirHasEntries(dir string) bool {
 	entries, err := os.ReadDir(dir)
 	return err == nil && len(entries) > 0

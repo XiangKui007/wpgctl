@@ -6,6 +6,7 @@ require (
 	github.com/Masterminds/sprig/v3 v3.3.0
 	github.com/go-sql-driver/mysql v1.8.1
 	github.com/gorilla/websocket v1.5.3
+	github.com/lib/pq v1.12.3
 	github.com/pkg/sftp v1.13.7
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/crypto v0.26.0

@@ -1,0 +1,68 @@
+/** Element Plus 与现场主题收口。 */
+/* —— Element Plus 与现场主题收口 —— */
+.el-table {
+  --el-table-header-bg-color: #f4f8f7;
+  --el-table-row-hover-bg-color: var(--water-soft);
+}
+
+.el-dialog {
+  border-radius: 12px !important;
+  overflow: hidden;
+}
+
+.el-alert {
+  border-radius: 8px;
+}
+
+.el-button--default:not(.is-link):not(.is-text):not(.diag-btn) {
+  --el-button-text-color: var(--water-deep);
+  --el-button-border-color: color-mix(in srgb, var(--water) 42%, #fff);
+  --el-button-bg-color: #fff;
+  --el-button-hover-text-color: var(--water-deep);
+  --el-button-hover-bg-color: var(--water-soft);
+  --el-button-hover-border-color: var(--water);
+}
+
+.el-button.is-plain {
+  font-weight: 600;
+}
+
+.panel-wizard .actions > .el-button--primary:not(.is-plain) {
+  min-height: 2.45rem;
+  padding-left: 1.2rem;
+  padding-right: 1.2rem;
+  font-weight: 700;
+  box-shadow: 0 8px 18px rgba(12, 155, 138, 0.3);
+}
+
+.panel-wizard .actions > .el-button--primary:not(.is-plain):hover {
+  box-shadow: 0 10px 22px rgba(12, 155, 138, 0.38);
+}
+
+.el-button.btn-active {
+  z-index: 1;
+}
+
+.el-button.link-btn {
+  height: auto;
+  padding: 0;
+  border: 0;
+  color: var(--water);
+}
+
+.el-empty {
+  padding: 1.75rem 1rem;
+}
+
+.fs-item .fs-icon {
+  font-size: 1.15rem;
+  color: var(--water);
+}
+
+.actions {
+  align-items: center;
+}
+
+.log-box.tall {
+  max-height: 480px;
+}

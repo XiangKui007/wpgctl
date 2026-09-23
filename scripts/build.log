@@ -1,0 +1,60 @@
+'¹ç›®å½•æ‰§è¡Œï¼š' ²»ÊÇÄÚ²¿»òÍâ²¿ÃüÁî£¬Ò²²»ÊÇ¿ÉÔËÐÐµÄ³ÌÐò
+»òÅú´¦ÀíÎÄ¼þ¡£
+>> npm run build (web/)
+
+up to date, audited 107 packages in 869ms
+
+21 packages are looking for funding
+  run `npm fund` for details
+
+found 0 vulnerabilities
+npm warn allow-scripts 1 package has install scripts not yet covered by allowScripts:
+npm warn allow-scripts   esbuild@0.25.12 (install: (install scripts present))
+npm warn allow-scripts
+npm warn allow-scripts Run `npm approve-scripts --allow-scripts-pending` to review, or `npm approve-scripts <pkg>` to allow.
+
+> wpgctl-ui@1.0.0 build
+> vite build
+
+vite v6.4.3 building for production...
+transforming...
+âœ“ 1669 modules transformed.
+rendering chunks...
+computing gzip size...
+../internal/ui/dist/index.html                                               1.17 kB â”‚ gzip:   0.72 kB
+../internal/ui/dist/wpg-deploy-assets/index-CxT08xzC.css                    36.78 kB â”‚ gzip:   8.24 kB
+../internal/ui/dist/wpg-deploy-assets/vendor-Dz4RGjfJ.css                  361.11 kB â”‚ gzip:  48.14 kB
+../internal/ui/dist/wpg-deploy-assets/YamlEditor-DZUXtkV8.js                 0.39 kB â”‚ gzip:   0.29 kB
+../internal/ui/dist/wpg-deploy-assets/WizardLocalPrecheck-DK4tEHTC.js        1.48 kB â”‚ gzip:   0.84 kB
+../internal/ui/dist/wpg-deploy-assets/ReportView-iAnwajVg.js                 1.64 kB â”‚ gzip:   0.99 kB
+../internal/ui/dist/wpg-deploy-assets/WizardFieldDocker-Bti3h37s.js          1.86 kB â”‚ gzip:   1.04 kB
+../internal/ui/dist/wpg-deploy-assets/WizardLocalInit-B7MswDLs.js            2.16 kB â”‚ gzip:   1.13 kB
+../internal/ui/dist/wpg-deploy-assets/WizardFieldNginx-DkHlHOUJ.js           2.25 kB â”‚ gzip:   1.21 kB
+../internal/ui/dist/wpg-deploy-assets/HistoryView-TvbBUP6Z.js                2.30 kB â”‚ gzip:   1.10 kB
+../internal/ui/dist/wpg-deploy-assets/PreflightView-BxTGOi2Z.js              2.40 kB â”‚ gzip:   1.35 kB
+../internal/ui/dist/wpg-deploy-assets/UpgradeView-DAlO5E_P.js                2.51 kB â”‚ gzip:   1.34 kB
+../internal/ui/dist/wpg-deploy-assets/WizardFieldVerify-3LVpUj74.js          3.18 kB â”‚ gzip:   1.41 kB
+../internal/ui/dist/wpg-deploy-assets/WizardFirewallPanel-DRwr2WKL.js        3.23 kB â”‚ gzip:   1.49 kB
+../internal/ui/dist/wpg-deploy-assets/LogsView-DIVAZag-.js                   3.23 kB â”‚ gzip:   1.66 kB
+../internal/ui/dist/wpg-deploy-assets/WizardLocalDeploy-ylBkaAcO.js          3.43 kB â”‚ gzip:   1.54 kB
+../internal/ui/dist/wpg-deploy-assets/HomeView-BXwCrD37.js                   3.97 kB â”‚ gzip:   1.98 kB
+../internal/ui/dist/wpg-deploy-assets/WizardFieldBusiness-Dm3ezPIo.js        4.01 kB â”‚ gzip:   1.74 kB
+../internal/ui/dist/wpg-deploy-assets/WizardFieldStandalone-B5i_enCS.js      5.04 kB â”‚ gzip:   1.78 kB
+../internal/ui/dist/wpg-deploy-assets/WizardFieldMiddleware-BYLDgxnI.js      5.19 kB â”‚ gzip:   2.06 kB
+../internal/ui/dist/wpg-deploy-assets/WizardFieldDatabase-jJPBQU7f.js        5.46 kB â”‚ gzip:   2.19 kB
+../internal/ui/dist/wpg-deploy-assets/FetchView-B3mW5WtC.js                  7.18 kB â”‚ gzip:   2.81 kB
+../internal/ui/dist/wpg-deploy-assets/WizardView-Bv2-5688.js                 7.34 kB â”‚ gzip:   2.53 kB
+../internal/ui/dist/wpg-deploy-assets/StatusView-SaHWuKLO.js                12.03 kB â”‚ gzip:   4.13 kB
+../internal/ui/dist/wpg-deploy-assets/WizardSiteStep-DF2i8QzJ.js            26.14 kB â”‚ gzip:   6.68 kB
+../internal/ui/dist/wpg-deploy-assets/index-DL69U73O.js                     95.77 kB â”‚ gzip:  33.16 kB
+../internal/ui/dist/wpg-deploy-assets/codemirror-C-vKtNNm.js               319.28 kB â”‚ gzip: 104.98 kB
+../internal/ui/dist/wpg-deploy-assets/vendor-wFnJ-MaI.js                 1,203.40 kB â”‚ gzip: 385.52 kB
+
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+âœ“ built in 9.56s
+>> go build GOOS=linux GOARCH=amd64 -> D:\wpg-deploy\bin\wpgctl-linux-amd64
+   done: D:\wpg-deploy\bin\wpgctl-linux-amd64 (15.04 MB)
+OK

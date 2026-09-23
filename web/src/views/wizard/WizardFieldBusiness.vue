@@ -12,8 +12,25 @@ export default {
 
 <template>
         <div>
-          <div class="hint-banner">
-            <strong>步骤 5 / 8</strong> — 须已导入 Nacos 配置。各 platform 服务目录通常含 <code>*.tar.zip</code>，需先展开为 <code>.tar</code> 再 <code>docker load</code>。点「编辑 .env」会自动在子目录查找；没有则打开空白，保存即新建。
+          <p class="wizard-step-purpose">{{ currentStepPurpose }}</p>
+          <div class="field-grid" style="margin-bottom:0.75rem">
+            <div class="field full">
+              <label class="req">platform 根目录</label>
+              <div class="path-row">
+                <el-input v-model="fieldPaths.platformRoot" placeholder="如 /workspace/platform（含 public/device）" />
+                <el-button type="primary" plain size="small" @click="openPicker('platformRoot', 'dir')">浏览</el-button>
+              </div>
+            </div>
+          </div>
+          <div class="actions" style="margin-top:0;margin-bottom:0.75rem" :class="{ busy }">
+            <el-button type="primary"
+              :class="{ 'btn-active': activeJobKey === 'business-all' }"
+              @click="runAllBusinessDeploy"
+              :disabled="busy || !fieldPaths.platformRoot || !deployableBusinessModules.length"
+            >
+              {{ activeJobKey === 'business-all' ? '部署中…' : '一键部署' }}
+            </el-button>
+            <span class="muted" style="font-size:0.85rem">将依次部署：{{ deployableBusinessModules.map((m) => m.label).join('、') || '（无可部署项）' }}</span>
           </div>
           <div class="actions" style="margin-top:0;margin-bottom:0.75rem">
             <el-button type="warning" plain size="small" @click="expandPlatformArchives(true)" :disabled="busy || !fieldPaths.platformRoot">
@@ -22,6 +39,7 @@ export default {
             <el-button type="primary" plain size="small" @click="patchAllBusinessEnv" :disabled="busy || !fieldPaths.platformRoot">
               批量更新 platform .env IP
             </el-button>
+            <span class="muted" style="font-size:0.85rem">部署单个模块时会自动解压该模块的 tar.zip，一般不用手动批量解压。</span>
           </div>
           <div class="module-deploy-list">
             <div v-for="m in fieldModules.business" :key="m.name" class="module-deploy-row">
@@ -52,9 +70,7 @@ export default {
               </div>
             </div>
           </div>
-          <div class="log-box" v-if="jobLogs.length" style="margin-top:1rem">
-            <div v-for="(l, i) in jobLogs" :key="'biz'+i" :class="logClass(l)">{{ l }}</div>
-          </div>
+          <JobLogBox :lines="jobLogs" :running="!!activeJobKey" />
           <div class="actions">
             <el-button plain @click="goToStep(3)">返回</el-button>
             <el-button type="primary" @click="completeFieldStep('business', 5)" :disabled="!fieldStepDone.middleware">

@@ -46,6 +46,46 @@ func TestModulePathNoTripleNest(t *testing.T) {
 	}
 }
 
+func TestModulePathPrefersWorkspaceMiddleNginx(t *testing.T) {
+	root := t.TempDir()
+	ws := filepath.Join(root, "workspace")
+	real := filepath.Join(ws, "middle", "middle", "nginx")
+	if err := os.MkdirAll(filepath.Join(real, "html"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(real, "docker-compose.yml"), []byte("services: {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pkgNginx := filepath.Join(ws, "pkg-upload", "middleware", "nginx")
+	if err := os.MkdirAll(pkgNginx, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	got := ModulePath(filepath.Join(ws, "pkg-upload"), "nginx")
+	if filepath.Clean(got) != filepath.Clean(real) {
+		t.Fatalf("from package: got %q want field %q", got, real)
+	}
+	got = ModulePath(ws, "nginx")
+	if filepath.Clean(got) != filepath.Clean(real) {
+		t.Fatalf("from workspace: got %q want %q", got, real)
+	}
+	got = ModulePath(filepath.Join(ws, "middle"), "nginx")
+	if filepath.Clean(got) != filepath.Clean(real) {
+		t.Fatalf("from middle: got %q want %q", got, real)
+	}
+}
+
+func TestModulePathWaterJobAlias(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "middleware", "water-job-biz")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	got := ModulePath(filepath.Join(root, "middleware"), "waterjob")
+	if filepath.Clean(got) != filepath.Clean(dir) {
+		t.Fatalf("got %q want %q", got, dir)
+	}
+}
+
 func TestModulePathNestedMiddlewareNginx(t *testing.T) {
 	root := t.TempDir()
 	pkg := filepath.Join(root, "sz-waterwork-4.1.1-pg")

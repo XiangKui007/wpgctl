@@ -37,4 +37,7 @@ func TestNormalizeServiceName(t *testing.T) {
 	if normalizeServiceName("water-job-biz") != "waterjob" {
 		t.Fatal("water-job-biz")
 	}
+	if normalizeServiceName("water-job") != "waterjob" {
+		t.Fatal("water-job")
+	}
 }

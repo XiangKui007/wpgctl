@@ -52,7 +52,7 @@ func findComposeFile(dir string) (string, error) {
 }
 
 // findComposeProjects 返回需要 compose up 的文件列表。
-// 市政水厂包（夹层）下通常有 waterwork-center、waterwork-device 两套，都要部署；否则退回单文件。
+// 市政水厂夹层下通常有 waterwork-center、waterwork-device；GIS 夹层下有 giscenter、gisdefault；都要部署。
 func findComposeProjects(dir string) ([]string, error) {
 	dir = filepath.Clean(strings.TrimSpace(dir))
 	if dir == "" || dir == "." {
@@ -61,11 +61,61 @@ func findComposeProjects(dir string) ([]string, error) {
 	if named := findNamedWaterworkComposes(dir); len(named) > 0 {
 		return named, nil
 	}
+	if named := findNamedGISComposes(dir); len(named) > 0 {
+		return named, nil
+	}
 	one, err := findComposeFileRaw(dir)
 	if err != nil {
 		return nil, err
 	}
 	return []string{one}, nil
+}
+
+// projectsForModule 按 SubService 筛选 compose。空则返回该包全部套件。
+func projectsForModule(dir, subService string) ([]string, error) {
+	projects, err := findComposeProjects(dir)
+	if err != nil {
+		return nil, err
+	}
+	return filterComposeBySubService(projects, subService)
+}
+
+// normalizeWaterworkSub 把 UI / CLI 传入的 center、waterwork-device 等归一成 center / device。
+func normalizeWaterworkSub(s string) string {
+	n := strings.ToLower(strings.TrimSpace(s))
+	n = strings.ReplaceAll(n, "_", "-")
+	switch {
+	case n == "" || n == "all":
+		return ""
+	case n == "center" || n == "waterwork-center" || strings.HasPrefix(n, "waterwork-center-"):
+		return "center"
+	case n == "device" || n == "waterwork-device" || strings.HasPrefix(n, "waterwork-device-"):
+		return "device"
+	default:
+		return n
+	}
+}
+
+func filterComposeBySubService(projects []string, subService string) ([]string, error) {
+	want := normalizeWaterworkSub(subService)
+	if want == "" {
+		return projects, nil
+	}
+	var out []string
+	for _, p := range projects {
+		base := filepath.Base(filepath.Dir(p))
+		kind := waterworkServiceKind(base)
+		if kind == "" {
+			kind = gisServiceKind(base)
+		}
+		if kind == want || strings.EqualFold(base, subService) {
+			out = append(out, p)
+		}
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("未找到子服务 %s 的 compose（已找到：%s）", subService, composeProjectLabels(projects))
+	}
+	return out, nil
 }
 
 func findComposeFileRaw(dir string) (string, error) {
@@ -135,7 +185,7 @@ func looksLikeNestedModulePath(dir string) bool {
 	parent := strings.ToLower(filepath.Base(filepath.Dir(dir)))
 	switch name {
 	case "nginx", "mysql", "pgsql", "postgres", "postgis", "mongodb", "redis",
-		"kafka", "nacos", "minio", "influxdb", "emqx":
+		"kafka", "nacos", "minio", "influxdb", "emqx", "waterjob", "water-job", "water-job-biz":
 		return true
 	}
 	return parent == "middleware" || parent == "middle" || parent == "platform"
@@ -232,6 +282,19 @@ func waterworkServiceKind(name string) string {
 
 // findNamedWaterworkComposes 按 center → device 收集市政水厂两套 compose（取各套最浅的一份）。
 func findNamedWaterworkComposes(dir string) []string {
+	return findNamedServiceComposes(dir, []string{"center", "device"}, waterworkServiceKind)
+}
+
+// findNamedGISComposes 按 giscenter → gisdefault 收集 GIS 两套 compose。
+func findNamedGISComposes(dir string) []string {
+	return findNamedServiceComposes(dir, []string{"center", "default"}, gisServiceKind)
+}
+
+// findNamedServiceComposes 按 kindOf(目录名) 归类，依 order 返回各套最浅的一份 compose。
+func findNamedServiceComposes(dir string, order []string, kindOf func(string) string) []string {
+	if kindOf == nil || len(order) == 0 {
+		return nil
+	}
 	type hit struct {
 		path  string
 		depth int
@@ -262,7 +325,7 @@ func findNamedWaterworkComposes(dir string) []string {
 			if depth > 5 {
 				return filepath.SkipDir
 			}
-			kind := waterworkServiceKind(info.Name())
+			kind := kindOf(info.Name())
 			if kind == "" {
 				return nil
 			}
@@ -278,7 +341,7 @@ func findNamedWaterworkComposes(dir string) []string {
 		})
 	}
 	var out []string
-	for _, kind := range []string{"center", "device"} {
+	for _, kind := range order {
 		if h, ok := best[kind]; ok {
 			out = append(out, h.path)
 		}

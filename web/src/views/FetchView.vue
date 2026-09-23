@@ -13,7 +13,7 @@ export default {
 </script>
 
 <template>
-    <section class="panel">
+    <section class="panel" v-loading="panelBusy" :element-loading-text="busyText">
       <div class="panel-head">
         <div>
           <h2>包中心</h2>
@@ -123,9 +123,7 @@ export default {
             {{ busy ? '进行中…' : '开始拉包 / 导入' }}
           </el-button>
         </div>
-        <div class="log-box" v-if="jobLogs.length">
-          <div v-for="(l, i) in jobLogs" :key="i" :class="logClass(l)">{{ l }}</div>
-        </div>
+        <JobLogBox :lines="jobLogs" :running="!!activeJobKey" />
         <p v-if="fetchResultDir" class="muted" style="color:var(--ok);margin-top:1rem">
           包已就绪：{{ settings.privacyMode ? '******' : fetchResultDir }}
           <el-button type="success" plain size="small" style="margin-left:0.5rem" @click="useFetchedPackage">用于部署向导</el-button>

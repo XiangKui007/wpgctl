@@ -1,6 +1,7 @@
 package moduledeploy
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -73,7 +74,7 @@ func nginxModuleRoot(dir string) string {
 }
 
 // FindNginxModuleDir 从包根或错误拼接的 nginx 路径定位真正的 nginx 模块目录。
-// 覆盖现场 …/middleware/middleware/nginx/conf/conf.d。
+// 优先工作簿根下的现场布局 /workspace/middle/middle/nginx，其次 middleware 套层。
 func FindNginxModuleDir(start string) string {
 	start = filepath.Clean(strings.TrimSpace(start))
 	if start == "" {
@@ -95,6 +96,9 @@ func FindNginxModuleDir(start string) string {
 		seen[p] = struct{}{}
 		roots = append(roots, p)
 	}
+	if ws := workbookRootOf(start); ws != "" {
+		add(ws)
+	}
 	add(start)
 	if strings.EqualFold(filepath.Base(start), "nginx") {
 		add(filepath.Dir(start))
@@ -104,26 +108,55 @@ func FindNginxModuleDir(start string) string {
 			if !util.DirExists(c) {
 				continue
 			}
-			if composeInDir(c) != "" {
+			if looksLikeNginxModule(c) {
 				return c
-			}
-			if p := findNginxWebConfExact(c); p != "" {
-				return nginxRootFromWebConf(p)
 			}
 		}
 	}
 	return ""
 }
 
+func looksLikeNginxModule(dir string) bool {
+	if composeInDir(dir) != "" {
+		return true
+	}
+	if !strings.EqualFold(filepath.Base(dir), "nginx") {
+		return false
+	}
+	return util.DirExists(filepath.Join(dir, "html")) ||
+		util.DirExists(filepath.Join(dir, "conf")) ||
+		util.DirExists(filepath.Join(dir, "conf.d")) ||
+		util.FileExists(filepath.Join(dir, "conf", "conf.d", nginxWebConfName)) ||
+		util.FileExists(filepath.Join(dir, "conf.d", nginxWebConfName))
+}
+
+func workbookRootOf(path string) string {
+	cur := filepath.Clean(strings.TrimSpace(path))
+	for i := 0; i < 24; i++ {
+		if cur == "" || cur == "." {
+			return ""
+		}
+		if strings.EqualFold(filepath.Base(cur), "workspace") {
+			return cur
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return ""
+		}
+		cur = parent
+	}
+	return ""
+}
+
 func nginxDirCandidates(root string) []string {
 	rel := []string{
+		filepath.Join("middle", "middle", "nginx"),
+		filepath.Join("middleware", "middleware", "nginx"),
 		"nginx",
 		filepath.Join("nginx", "nginx"),
-		filepath.Join("middleware", "nginx"),
-		filepath.Join("middleware", "middleware", "nginx"),
-		filepath.Join("middleware", "middleware", "middleware", "nginx"),
 		filepath.Join("middle", "nginx"),
-		filepath.Join("middle", "middle", "nginx"),
+		filepath.Join("middleware", "nginx"),
+		filepath.Join("middleware", "middleware", "middleware", "nginx"),
 	}
 	out := make([]string, 0, len(rel)+1)
 	for _, r := range rel {
@@ -189,9 +222,20 @@ func findNginxWebConfExact(root string) string {
 }
 
 // ExpandNginxHTML 解压 html 目录下全部 .zip（可选；无 zip 时不报错）。
+// 解压目录名会去掉 3. / 4. 序号和版本号，与 nginx location 对齐。
 func ExpandNginxHTML(htmlDir string) (*fetch.ExpandResult, error) {
 	if !util.DirExists(htmlDir) {
 		return &fetch.ExpandResult{RootDir: htmlDir}, nil
 	}
-	return fetch.ExpandArchivesOptional(htmlDir)
+	res, err := fetch.Expand(fetch.ExpandOptions{
+		Root:     htmlDir,
+		DestName: fetch.NormalizeHTMLDirName,
+	})
+	if errors.Is(err, fetch.ErrNoArchivesFound) {
+		if res == nil {
+			res = &fetch.ExpandResult{RootDir: htmlDir}
+		}
+		err = nil
+	}
+	return res, err
 }

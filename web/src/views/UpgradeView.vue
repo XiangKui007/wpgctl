@@ -11,7 +11,7 @@ export default {
 </script>
 
 <template>
-    <section class="panel">
+    <section class="panel" v-loading="panelBusy" :element-loading-text="busyText">
       <div class="panel-head">
         <div>
           <h2>升级 / 回滚</h2>
@@ -51,9 +51,7 @@ export default {
           <el-button type="danger" plain @click="runRollback" :disabled="busy">执行回滚</el-button>
         </div>
 
-        <div class="log-box" v-if="jobLogs.length">
-          <div v-for="(l, i) in jobLogs" :key="i" :class="logClass(l)">{{ l }}</div>
-        </div>
+        <JobLogBox :lines="jobLogs" :running="!!activeJobKey" />
       </div>
     </section>
 </template>

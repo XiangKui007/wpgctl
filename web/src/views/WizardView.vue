@@ -30,8 +30,8 @@ export default {
         <div>
           <h2>部署向导</h2>
           <p>
-            <template v-if="isLocalDocker">本机 Docker 联调（manifest 一键流程）：请先启动 Docker Desktop；paths 使用本机盘符路径。红色体检项会阻断后续动作。</template>
-            <template v-else>Linux 现场部署：默认按多机规划；paths 使用 Linux 路径。{{ isMultiNode ? '分配到从机的模块会自动通过 SSH 分发，只需在主控机点按钮。' : '' }}</template>
+            <template v-if="isLocalDocker">本机 Docker 联调。</template>
+            <template v-else>Linux 现场部署。</template>
           </p>
         </div>
       </div>
@@ -52,16 +52,15 @@ export default {
         </div>
       </div>
 
-      <div class="surface">
+      <!-- 短操作（保存 / 建目录 / 探测）只遮当前面板；长任务不遮，看日志框 -->
+      <div class="surface" v-loading="panelBusy" :element-loading-text="busyText">
         <p v-if="siteError" class="wizard-alert muted">{{ siteError }}</p>
 
         <!-- 多机：② ~ ⑥ 步公用的 SSH 分发面板（⑦ Nginx 不再展示文件同步） -->
         <details v-if="isMultiNode && wizardStep >= 1 && wizardStep <= 5" class="ssh-panel" :open="sshPanelOpen">
           <summary @click.prevent="sshPanelOpen = !sshPanelOpen">
-            <strong>SSH 分发到从机</strong>
-            <span class="muted">
-              · 分配到其他机器的模块会自动通过 SSH 在目标机执行（上传 wpgctl / site.yaml / 缺失的模块目录）
-            </span>
+            <strong>SSH 分发</strong>
+            <span class="muted">· 从机模块经 SSH 执行</span>
             <span class="badge" :class="sshCredsReady ? 'green' : 'yellow'" style="margin-left:auto">
               {{ sshCredsReady ? '凭据已填' : '未填凭据' }}
             </span>
@@ -76,21 +75,21 @@ export default {
               <el-input v-model="sshCreds.keyPath" placeholder="/root/.ssh/id_rsa" />
             </div>
             <div class="field full">
-              <el-checkbox v-model="remoteSync.syncFiles">目标机缺少模块目录时自动上传（同路径落盘，跳过 data/logs；非 Nginx 还跳过 html/frontend/dist，已存在文件不重传）</el-checkbox>
-              <el-checkbox v-model="remoteSync.forceSync">强制重新同步（覆盖目标机已有目录）</el-checkbox>
+              <el-checkbox v-model="remoteSync.syncFiles">缺少目录时自动上传（跳过 data/logs 与前端静态）</el-checkbox>
+              <el-checkbox v-model="remoteSync.forceSync">强制覆盖已有目录</el-checkbox>
             </div>
             <p class="hint-banner full" style="margin:0">
-              从机账号非 root 时自动 <code>sudo</code>；从机列表：
+              从机：
               <span v-for="(n, i) in siteForm.nodes.slice(1)" :key="i" class="node-target">{{ n.name }} ({{ n.sshUser || 'root' }}@{{ n.ip }})</span>
             </p>
           </div>
         </details>
 
-        <!-- ⑦ Nginx / ⑧ 验收：仅 SSH 凭据（验收时汇总从机容器） -->
-        <details v-if="isMultiNode && (wizardStep === 6 || wizardStep === 7)" class="ssh-panel" :open="sshPanelOpen">
+        <!-- ⑧ 验收：SSH 凭据用于汇总从机容器；⑦ Nginx 只在主控机部署前端，不经 SSH -->
+        <details v-if="isMultiNode && wizardStep === 7" class="ssh-panel" :open="sshPanelOpen">
           <summary @click.prevent="sshPanelOpen = !sshPanelOpen">
-            <strong>{{ wizardStep === 7 ? 'SSH 凭据（验收从机容器）' : 'SSH 凭据（从机部署 Nginx）' }}</strong>
-            <span class="muted">· {{ wizardStep === 7 ? '用于汇总各从机 docker ps' : '不自动同步 conf；请先在本机编辑保存后再部署' }}</span>
+            <strong>SSH 凭据</strong>
+            <span class="muted">· 验收从机容器</span>
             <span class="badge" :class="sshCredsReady ? 'green' : 'yellow'" style="margin-left:auto">
               {{ sshCredsReady ? '凭据已填' : '未填凭据' }}
             </span>

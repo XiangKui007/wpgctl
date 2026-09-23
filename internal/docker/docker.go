@@ -5,11 +5,15 @@
 package dockerx
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os/exec"
+	"path"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -197,6 +201,12 @@ func (r *Runner) ComposeUp(dir string, file string, profiles []string, build boo
 	}
 	args = append(args, services...)
 	_, err := r.runCompose(dir, args...)
+	if err != nil && IptablesBroken(err) {
+		if rerr := RestartDaemon(); rerr != nil {
+			return fmt.Errorf("docker compose up 失败: %w；自动重启 docker 失败: %v", err, rerr)
+		}
+		_, err = r.runCompose(dir, args...)
+	}
 	if err != nil {
 		return fmt.Errorf("docker compose up 失败: %w", err)
 	}
@@ -269,10 +279,13 @@ func parseDockerPsLine(line string) (ComposeService, error) {
 		Ports:      row.Ports,
 		Created:    compactCreated(row.CreatedAt),
 		Project:    labels["com.docker.compose.project"],
-		ComposeDir: labels["com.docker.compose.project.working_dir"],
+		ComposeDir: composeDirFromLabels(labels),
 		Networks:   networksFromRaw(row.Networks),
 	}, nil
 }
+
+// reDockerLabelKV 切 docker ps Labels 的 k=v,k=v。config_files 值里可能带逗号，不能整串按逗号切开。
+var reDockerLabelKV = regexp.MustCompile(`(?:^|,)([A-Za-z0-9][A-Za-z0-9._-]*)=`)
 
 func parseDockerLabels(raw json.RawMessage) map[string]string {
 	out := map[string]string{}
@@ -287,14 +300,49 @@ func parseDockerLabels(raw json.RawMessage) map[string]string {
 	if json.Unmarshal(raw, &s) != nil || s == "" {
 		return out
 	}
-	for _, part := range strings.Split(s, ",") {
-		k, v, ok := strings.Cut(part, "=")
-		if !ok {
-			continue
+	return parseDockerLabelCSV(s)
+}
+
+// parseDockerLabelCSV 解析 docker ps {{json .}} 的 Labels 字符串，保留 config_files 里的逗号。
+func parseDockerLabelCSV(s string) map[string]string {
+	out := map[string]string{}
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return out
+	}
+	idx := reDockerLabelKV.FindAllStringSubmatchIndex(s, -1)
+	if len(idx) == 0 {
+		return out
+	}
+	for i, m := range idx {
+		key := s[m[2]:m[3]]
+		valStart := m[1]
+		valEnd := len(s)
+		if i+1 < len(idx) {
+			valEnd = idx[i+1][0]
 		}
-		out[strings.TrimSpace(k)] = strings.TrimSpace(v)
+		out[key] = strings.TrimSpace(s[valStart:valEnd])
 	}
 	return out
+}
+
+// composeDirFromLabels 取 compose 工作目录；缺 working_dir 时用 config_files 的父目录。
+func composeDirFromLabels(labels map[string]string) string {
+	if d := strings.TrimSpace(labels["com.docker.compose.project.working_dir"]); d != "" {
+		return d
+	}
+	files := strings.TrimSpace(labels["com.docker.compose.project.config_files"])
+	if files == "" {
+		return ""
+	}
+	first := files
+	if i := strings.IndexByte(files, ','); i >= 0 {
+		first = strings.TrimSpace(files[:i])
+	}
+	if first == "" {
+		return ""
+	}
+	return path.Dir(first)
 }
 
 // ComposePs 返回 compose 服务状态 JSON。
@@ -329,9 +377,9 @@ type ComposeService struct {
 	Health     string `json:"Health"`
 	Image      string `json:"Image"`
 	Ports      string `json:"Ports,omitempty"`
-	Created    string `json:"Created,omitempty"`    // 创建时间，已去掉时区后缀便于现场阅读
+	Created    string `json:"Created,omitempty"` // 创建时间，已去掉时区后缀便于现场阅读
 	Project    string `json:"Project,omitempty"`
-	ComposeDir string `json:"ComposeDir,omitempty"` // compose 工作目录，排障与 Down 栈用
+	ComposeDir string `json:"ComposeDir,omitempty"` // compose 工作目录
 	Networks   string `json:"Networks,omitempty"`   // 加入的网络，逗号分隔
 	ExitCode   *int   `json:"ExitCode,omitempty"`   // 非运行中才带退出码，避免 running 也显示 0
 	Node       string `json:"Node,omitempty"`       // 节点名（多机状态页）
@@ -425,7 +473,7 @@ func composeServiceFromJSON(row composePsJSON) ComposeService {
 		Ports:      ports,
 		Created:    createdFromRaw(row.Created),
 		Project:    project,
-		ComposeDir: labels["com.docker.compose.project.working_dir"],
+		ComposeDir: composeDirFromLabels(labels),
 		Networks:   networksFromRaw(row.Networks),
 		ExitCode:   exitCodeForState(row.State, row.Status, row.ExitCode),
 	}
@@ -497,12 +545,16 @@ func networksFromRaw(raw json.RawMessage) string {
 func portsFromPublishers(pubs []composePublisher) string {
 	parts := make([]string, 0, len(pubs))
 	for _, p := range pubs {
-		if p.PublishedPort == 0 {
-			continue
-		}
 		proto := p.Protocol
 		if proto == "" {
 			proto = "tcp"
+		}
+		// host 网络常见 PublishedPort=0，只暴露容器口，状态页仍要能对齐展示。
+		if p.PublishedPort == 0 {
+			if p.TargetPort > 0 {
+				parts = append(parts, fmt.Sprintf("%d/%s", p.TargetPort, proto))
+			}
+			continue
 		}
 		host := p.URL
 		if host == "" {
@@ -554,7 +606,7 @@ func parseComposePsStandalone(out string) ([]ComposeService, error) {
 	return list, nil
 }
 
-// Logs 获取容器日志。
+// Logs 获取容器日志快照（不跟随）。follow 保留兼容旧调用，真正的 -f 请用 LogsFollow。
 func (r *Runner) Logs(container string, tail int, follow bool) (string, error) {
 	args := []string{"logs", fmt.Sprintf("--tail=%d", tail)}
 	if follow {
@@ -562,6 +614,48 @@ func (r *Runner) Logs(container string, tail int, follow bool) (string, error) {
 	}
 	args = append(args, container)
 	return r.runIn(r.bin(), "", args...)
+}
+
+// LogsFollow 执行 docker logs --tail -f，按行回调；ctx 取消时杀掉进程并返回 nil。
+func (r *Runner) LogsFollow(ctx context.Context, container string, tail int, onLine func(string)) error {
+	if tail <= 0 {
+		tail = 200
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	cmd := exec.CommandContext(ctx, r.bin(), "logs", fmt.Sprintf("--tail=%d", tail), "-f", container)
+	pr, pw := io.Pipe()
+	cmd.Stdout = pw
+	cmd.Stderr = pw
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("docker logs 失败: %w", err)
+	}
+	waitErr := make(chan error, 1)
+	go func() {
+		waitErr <- cmd.Wait()
+		_ = pw.Close()
+	}()
+	sc := bufio.NewScanner(pr)
+	sc.Buffer(make([]byte, 64*1024), 4*1024*1024)
+	var gotLine bool
+	for sc.Scan() {
+		gotLine = true
+		if onLine != nil {
+			onLine(sc.Text())
+		}
+	}
+	errWait := <-waitErr
+	if ctx.Err() != nil {
+		return nil
+	}
+	if err := sc.Err(); err != nil {
+		return fmt.Errorf("读取 docker logs 失败: %w", err)
+	}
+	if errWait != nil && !gotLine {
+		return fmt.Errorf("docker logs 失败: %v", errWait)
+	}
+	return nil
 }
 
 // StartContainer 启动已存在的容器。

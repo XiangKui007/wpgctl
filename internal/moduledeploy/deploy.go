@@ -24,6 +24,7 @@ type Options struct {
 	ComposeBuild bool     // 市政/模型等：compose up -d --build；构建前仍 load java8.tar 等基础镜像
 	ComposeFlags []string // 如 mongodb --compatibility
 	LoadedRefs   []string // 已 load 的镜像（nginx 等分步部署时传入 compose sync）
+	SubService   string   // 市政水厂：center / device，只 compose 其中一套；空则两套都部署。两套 .env 仍会一起按站点改写。
 }
 
 // Result 执行摘要。
@@ -87,7 +88,8 @@ func Run(opts Options) (*Result, error) {
 	}
 	res.LoadedRefs = loadedRefs
 
-	// Kafka 等：无论是否 patch .env，都按 site.yaml 改 compose environment（库/中间件常无 .env）
+	// docker-compose.yaml 原则上不改，站点差异全部落在 .env。
+	// 唯一例外是 Kafka：交付包没有 .env，KAFKA_ADVERTISED_LISTENERS 硬写在 compose 里，只能改它。
 	if opts.Site != nil {
 		composeChanged, err := PatchComposeEnvForSite(dir, opts.Site)
 		if err != nil {
@@ -95,76 +97,58 @@ func Run(opts Options) (*Result, error) {
 		}
 		if len(composeChanged) > 0 {
 			res.EnvPatched = append(res.EnvPatched, composeChanged...)
-			res.Steps = append(res.Steps, fmt.Sprintf("已更新 compose environment: %v", composeChanged))
+			res.Steps = append(res.Steps, fmt.Sprintf("已更新 Kafka compose environment: %v", composeChanged))
 		}
 	}
 
 	if opts.PatchEnv && opts.Site != nil {
-		envPath := filepath.Join(dir, ".env")
-		if util.FileExists(envPath) {
-			changed, err := EnvPatchHosts(envPath, opts.Site)
+		for _, root := range envPatchWalkRoots(dir) {
+			changed, err := PatchEnvTree(root, opts.Site)
 			if err != nil {
 				return res, err
 			}
-			res.EnvPatched = changed
 			if len(changed) > 0 {
-				res.Steps = append(res.Steps, fmt.Sprintf("已更新 .env: %v", changed))
-			}
-		}
-		// gis / 市政水厂等含子服务目录
-		_ = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
-			if err != nil || info.IsDir() || info.Name() != ".env" || path == envPath {
-				return nil
-			}
-			changed, e := EnvPatchHosts(path, opts.Site)
-			if e == nil && len(changed) > 0 {
 				res.EnvPatched = append(res.EnvPatched, changed...)
-				res.Steps = append(res.Steps, "已更新 "+path)
-			}
-			return nil
-		})
-		if projects, perr := findComposeProjects(dir); perr == nil {
-			repl := hostReplacements(opts.Site)
-			for _, compose := range projects {
-				changed, e := PatchComposeEnv(compose, repl)
-				if e == nil && len(changed) > 0 {
-					res.EnvPatched = append(res.EnvPatched, changed...)
-					res.Steps = append(res.Steps, fmt.Sprintf("已更新 compose environment（%s）: %v", filepath.Base(filepath.Dir(compose)), changed))
-				}
+				res.Steps = append(res.Steps, fmt.Sprintf("已更新 .env（%s）: %d 处", filepath.Base(root), len(changed)))
+			} else {
+				res.Steps = append(res.Steps, "未改 .env（目录无待同步键或已是目标值）: "+root)
 			}
 		}
 	}
 
 	if opts.ComposeUp {
-		projects, err := findComposeProjects(dir)
+		projects, err := projectsForModule(dir, opts.SubService)
 		if err != nil && opts.ComposeBuild {
 			er, exErr := fetch.ExpandArchivesOptional(dir)
 			if exErr == nil && er != nil {
 				res.Steps = append(res.Steps, er.Steps...)
 			}
-			projects, err = findComposeProjects(dir)
+			projects, err = projectsForModule(dir, opts.SubService)
 		}
 		if err != nil {
 			return res, err
 		}
 		if named := findNamedWaterworkComposes(dir); len(named) > 0 {
-			res.Steps = append(res.Steps, fmt.Sprintf("市政水厂将部署 %d 套 compose：%s", len(projects), composeProjectLabels(projects)))
-			if len(named) == 1 {
-				res.Steps = append(res.Steps, "WARN: 只找到 waterwork-center / waterwork-device 其中一套，夹层下通常两套都要部署")
+			res.Steps = append(res.Steps, fmt.Sprintf("市政水厂 compose：%s", composeProjectLabels(projects)))
+			if opts.SubService == "" && len(named) == 1 {
+				res.Steps = append(res.Steps, "WARN: 只找到 waterwork-center / waterwork-device 其中一套，夹层下通常两套都要分别部署")
 			}
+		}
+		if named := findNamedGISComposes(dir); len(named) > 0 {
+			res.Steps = append(res.Steps, fmt.Sprintf("GIS 将部署 %d 套 compose：%s", len(projects), composeProjectLabels(projects)))
+			if len(named) == 1 {
+				res.Steps = append(res.Steps, "WARN: 只找到 giscenter / gisdefault 其中一套，夹层下通常两套都要部署")
+			}
+		}
+		fwSteps, fwErr := OpenModuleFirewall(dir, projects, opts.Site)
+		res.Steps = append(res.Steps, fwSteps...)
+		if fwErr != nil {
+			res.Steps = append(res.Steps, "WARN: "+fwErr.Error()+"（请手工放行后再访问该服务）")
 		}
 		d := dockerx.New()
 		for _, compose := range projects {
 			if err := composeUpOne(dir, opts, compose, d, loadedRefs, res); err != nil {
 				return res, err
-			}
-		}
-		// Nacos：compose 起来后立刻放行 8848/9848，否则控制台访问与配置导入会连不上
-		if IsNacosModule(dir) {
-			fwSteps, fwErr := OpenNacosFirewall(opts.Site)
-			res.Steps = append(res.Steps, fwSteps...)
-			if fwErr != nil {
-				res.Steps = append(res.Steps, "WARN: "+fwErr.Error()+"（请手工放行后再导入配置）")
 			}
 		}
 	}

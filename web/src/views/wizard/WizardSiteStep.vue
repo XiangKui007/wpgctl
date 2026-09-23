@@ -15,14 +15,6 @@ export default {
 <template>
         <div>
           <p class="wizard-step-purpose">{{ currentStepPurpose }}</p>
-          <p class="hint-banner">
-            <template v-if="isLocalDocker">可用「表单」分 5 小步填写常用项，或切到「YAML」精细编辑。</template>
-            <template v-else>
-              <strong>Linux 现场 SOP：</strong>表单分 5 小步：项目 → 机器 → 中间件 → 目录 → 确认保存；每步只填当前所需，顶栏 Tab 可回看已完成步骤。
-            </template>
-            保存会写入 {{ sitePath || 'site.yaml' }}。
-          </p>
-
           <el-radio-group :model-value="siteEditMode" size="small" style="margin:0 0 1.1rem" @change="switchSiteMode">
             <el-radio-button value="form">表单</el-radio-button>
             <el-radio-button value="yaml">YAML</el-radio-button>
@@ -51,7 +43,7 @@ export default {
             </div>
 
             <!-- 1. 项目信息 -->
-            <div v-show="siteSubStep === 0" class="field-grid">
+            <div v-show="currentSiteSubStep.key === 'project'" class="field-grid">
             <div class="field">
               <label class="req">项目名称</label>
               <el-input v-model="siteForm.site.name" placeholder="水厂/项目显示名，如：某某市政水厂" />
@@ -76,27 +68,16 @@ export default {
             </div>
 
             <!-- 3. 中间件连接 -->
-            <div v-show="siteSubStep === 2" class="field-grid">
+            <div v-show="currentSiteSubStep.key === 'middleware'" class="field-grid">
             <div class="field full">
               <div class="host-fill-bar">
                 <el-button type="primary" plain size="small" @click="applyDefaultCreds(true)" :disabled="busy">
                   填充默认账号密码
                 </el-button>
-                <el-button
-                  type="primary"
-                  plain
-                  size="small"
-                  v-if="!isLocalDocker && deployTopology === 'multi'"
-                  @click="syncServiceAssignments"
-                  :disabled="busy"
-                >
-                  按服务分配重新同步 Host
-                </el-button>
                 <span v-if="hostFillMsg" class="muted host-fill-msg">{{ hostFillMsg }}</span>
               </div>
               <p class="hint-banner" style="margin:0.45rem 0 0">
-                已预设公司标准账号密码（Nacos namespace <code>intergrate</code>，Kafka 无密码）。现场与标准包一致时不用改。
-                <template v-if="!isLocalDocker">Host 已按上一步机器规划自动填好，一般只需核对。</template>
+                标准账号已填。Host 已按机器规划同步。
               </p>
             </div>
             <div class="field">
@@ -154,7 +135,7 @@ export default {
             </div>
 
             <!-- 2. 机器规划 -->
-            <div v-show="siteSubStep === 1" class="field-grid">
+            <div v-show="currentSiteSubStep.key === 'machines'" class="field-grid">
             <div v-if="!isLocalDocker" class="field full">
               <label>部署方式</label>
               <el-radio-group :model-value="deployTopology" size="small" @change="setDeployTopology">
@@ -162,23 +143,34 @@ export default {
                 <el-radio-button value="single">一台机器</el-radio-button>
               </el-radio-group>
               <p v-if="deployTopology === 'single'" class="muted" style="margin:0.45rem 0 0;font-size:0.85rem">
-                联调 / 极小规模：所有服务在同一台。真实现场交付请优先选「多台机器」。
+                全部服务跑在这一台。
               </p>
               <p v-else class="muted" style="margin:0.45rem 0 0;font-size:0.85rem">
-                现场常态：先添加机器，再为每项服务选择目标机；从机通过 SSH 分发执行。无需理解 database、middleware 等角色。
+                第一台为主控；从机填 IP 与 SSH。
               </p>
             </div>
             <div v-if="!isLocalDocker && deployTopology === 'single'" class="field">
               <label class="req">机器 IP</label>
-              <el-input v-model="siteForm.nodes[0].ip" placeholder="现场主控机 IP" />
+              <div class="path-row">
+                <el-input v-model="siteForm.nodes[0].ip" placeholder="现场主控机 IP" />
+                <span
+                  v-if="nodeDockerLabel(siteForm.nodes[0])"
+                  class="badge"
+                  :class="nodeDockerOf(siteForm.nodes[0]).ok ? 'green' : 'yellow'"
+                  :title="nodeDockerOf(siteForm.nodes[0]).message || ''"
+                >{{ nodeDockerLabel(siteForm.nodes[0]) }}</span>
+              </div>
             </div>
             <div v-if="!isLocalDocker && deployTopology === 'multi'" class="field full">
               <div class="node-section-head">
                 <div>
                   <strong>1. 添加机器</strong>
-                  <p class="muted">第一台是当前主控机，其他机器通过 SSH 初始化。</p>
+                  <p class="muted">第一台为主控机。</p>
                 </div>
                 <div class="actions compact">
+                  <el-button type="primary" plain size="small" :loading="nodeDockerBusy" @click="refreshNodeDocker">
+                    {{ nodeDockerBusy ? '检查 Docker…' : '检查各机 Docker' }}
+                  </el-button>
                   <el-button type="primary" plain size="small" @click="applyDualNodeTemplate">常用双机方案</el-button>
                   <el-button type="primary" plain size="small" @click="addNode">+ 添加机器</el-button>
                 </div>
@@ -198,15 +190,18 @@ export default {
                 </el-select>
                 <span v-if="hostFillMsg" class="muted host-fill-msg">{{ hostFillMsg }}</span>
               </div>
-              <p class="hint-banner" style="margin:0 0 0.75rem">
-                「自动获取本机 IP」会填到第一台主控机；其他机器请手工填写 IP 与 SSH 账号。
-              </p>
               <div class="node-card-grid">
                 <article v-for="(n, idx) in siteForm.nodes" :key="idx" class="node-card">
                   <div class="node-card-title">
                     <span class="node-number">{{ idx + 1 }}</span>
                     <strong>{{ n.name || `机器 ${idx + 1}` }}</strong>
                     <span v-if="idx === 0" class="badge green">当前主控机</span>
+                    <span
+                      v-if="nodeDockerLabel(n)"
+                      class="badge"
+                      :class="nodeDockerOf(n).ok ? 'green' : 'yellow'"
+                      :title="nodeDockerOf(n).message || nodeDockerLabel(n)"
+                    >{{ nodeDockerLabel(n) }}</span>
                     <el-button
                       v-if="idx > 0"
                       type="danger"
@@ -245,7 +240,7 @@ export default {
               <div class="node-section-head service-section-head">
                 <div>
                   <strong>2. 分配服务</strong>
-                  <p class="muted">每项服务选择一台机器；中间件连接地址会自动同步。前端静态只部署到中间件机，由 Nginx 转发，不会随其它服务分发。</p>
+                  <p class="muted">每项服务选一台。Nginx 只在主控机。</p>
                 </div>
                 <el-button type="primary" plain size="small" @click="assignAllToPrimary">全部放到主控机</el-button>
               </div>
@@ -266,7 +261,7 @@ export default {
                         @change="syncServiceAssignments"
                       >
                         <el-option :value="-1" label="不部署" />
-                        <el-option :value="middlewareAnchorIndex()" :label="middlewareAnchorLabel" />
+                        <el-option :value="0" :label="primaryNodeLabel" />
                       </el-select>
                       <el-select
                         v-else
@@ -301,7 +296,15 @@ export default {
             </div>
             <div v-if="isLocalDocker" class="field">
               <label class="req">本机节点 IP</label>
-              <el-input v-model="siteForm.nodes[0].ip" placeholder="127.0.0.1" />
+              <div class="path-row">
+                <el-input v-model="siteForm.nodes[0].ip" placeholder="127.0.0.1" />
+                <span
+                  v-if="nodeDockerLabel(siteForm.nodes[0])"
+                  class="badge"
+                  :class="nodeDockerOf(siteForm.nodes[0]).ok ? 'green' : 'yellow'"
+                  :title="nodeDockerOf(siteForm.nodes[0]).message || ''"
+                >{{ nodeDockerLabel(siteForm.nodes[0]) }}</span>
+              </div>
             </div>
             <div v-if="isLocalDocker || deployTopology === 'single'" class="field full">
               <div class="host-fill-bar">
@@ -319,18 +322,16 @@ export default {
                 </el-select>
                 <span v-if="hostFillMsg" class="muted host-fill-msg">{{ hostFillMsg }}</span>
               </div>
-              <p class="hint-banner" style="margin:0.45rem 0 0">
-                点击「自动获取本机 IP」可自动识别当前机器地址，多网卡时可在下拉框中切换。
-              </p>
+              <p class="muted" style="margin:0.45rem 0 0;font-size:0.85rem">多网卡时在下拉框切换。</p>
             </div>
             </div>
 
             <!-- 5. 确认保存 -->
-            <div v-show="siteSubStep === 4" class="site-summary">
+            <div v-show="currentSiteSubStep.key === 'confirm'" class="site-summary">
               <section class="summary-block">
                 <header>
                   <strong>项目</strong>
-                  <el-button type="primary" link class="link-btn" @click="goSiteSubStep(0)">修改</el-button>
+                  <el-button type="primary" link class="link-btn" @click="goSiteSubStepByKey('project')">修改</el-button>
                 </header>
                 <dl>
                   <dt>名称</dt><dd>{{ siteForm.site.name || '—' }}</dd>
@@ -341,7 +342,7 @@ export default {
               <section class="summary-block">
                 <header>
                   <strong>{{ isLocalDocker ? '本机节点' : '机器规划' }}</strong>
-                  <el-button type="primary" link class="link-btn" @click="goSiteSubStep(1)">修改</el-button>
+                  <el-button type="primary" link class="link-btn" @click="goSiteSubStepByKey('machines')">修改</el-button>
                 </header>
                 <dl v-if="isLocalDocker || deployTopology === 'single'">
                   <dt>部署方式</dt><dd>{{ isLocalDocker ? '本机 Docker' : '一台机器（所有服务）' }}</dd>
@@ -360,7 +361,7 @@ export default {
               <section class="summary-block">
                 <header>
                   <strong>中间件连接</strong>
-                  <el-button type="primary" link class="link-btn" @click="goSiteSubStep(2)">修改</el-button>
+                  <el-button type="primary" link class="link-btn" @click="goSiteSubStepByKey('middleware')">修改</el-button>
                 </header>
                 <dl>
                   <dt>Nacos</dt><dd>{{ siteForm.middleware.nacos.host || '—' }}</dd>
@@ -373,11 +374,10 @@ export default {
               <section class="summary-block">
                 <header>
                   <strong>目录与安装包</strong>
-                  <el-button type="primary" link class="link-btn" @click="goSiteSubStep(3)">修改</el-button>
+                  <el-button type="primary" link class="link-btn" @click="goSiteSubStepByKey('paths')">修改</el-button>
                 </header>
                 <dl>
-                  <dt>workspace</dt><dd>{{ siteForm.paths.workspace || '—' }}</dd>
-                  <dt>nginxHtml</dt><dd>{{ siteForm.paths.nginxHtml || '—' }}</dd>
+                  <dt v-if="isLocalDocker">workspace</dt><dd v-if="isLocalDocker">{{ siteForm.paths.workspace || '—' }}</dd>
                   <template v-if="!isLocalDocker">
                     <dt>middleware 根目录</dt><dd>{{ fieldPaths.middlewareRoot || '—' }}</dd>
                     <dt>platform 根目录</dt><dd>{{ fieldPaths.platformRoot || '—' }}</dd>
@@ -389,9 +389,6 @@ export default {
                   </template>
                 </dl>
               </section>
-              <p class="hint-banner" style="margin:0.25rem 0 0">
-                点击「{{ isLocalDocker ? '下一步：环境体检' : '保存并进入 ② 安装 Docker' }}」会把以上内容写入 {{ sitePath || 'site.yaml' }}；也可先「保存 site.yaml」再回头调整。
-              </p>
             </div>
           </div>
 
@@ -401,10 +398,13 @@ export default {
           </div>
 
           <!-- 4. 目录与安装包（fieldPaths 不在 site.yaml 内，YAML 模式下也需填写） -->
-          <div v-show="siteEditMode === 'yaml' || siteSubStep === 3" class="field-grid">
+          <div v-show="siteEditMode === 'yaml' || currentSiteSubStep.key === 'paths'" class="field-grid">
             <div v-if="siteEditMode === 'yaml'" class="field full">
               <label>向导工作目录（不写入 site.yaml，仅本工具使用）</label>
             </div>
+            <p class="hint-banner field full" style="margin:0 0 0.5rem">
+              点 zip 不会解压；需要时点该行「解压此包」。
+            </p>
             <div v-if="isLocalDocker" class="field full">
               <label>Manifest 文件（体检用，可选）</label>
               <div class="path-row">
@@ -422,15 +422,10 @@ export default {
             <div v-if="!isLocalDocker" class="field full">
               <label class="req">middleware 根目录</label>
               <div class="path-row">
-                <el-input v-model="fieldPaths.middlewareRoot" placeholder="如 /workspace/middleware 或 /workspace/middle" />
+                <el-input v-model="fieldPaths.middlewareRoot" placeholder="如 /workspace/middle 或 /workspace/middleware" />
                 <el-button type="primary" plain size="small" @click="openPicker('middlewareRoot', 'dir')">浏览</el-button>
               </div>
-              <p class="hint-banner" style="margin:0.35rem 0 0">
-                填<strong>直接含</strong> <code>mysql</code>、<code>pgsql</code> 的那层，或其<strong>外层</strong>均可。
-                现场常见 <code>/workspace/middleware</code> 或 <code>/workspace/middle</code>，
-                以及水厂包内 <code>…/middleware/middleware/nginx</code> 这类套层；
-                双层 <code>.../middleware/middleware/mysql</code> 填内层或外层都行。
-              </p>
+              <p class="muted" style="margin:0.35rem 0 0">含 mysql / pgsql 的目录，或其外层。</p>
             </div>
             <div v-if="!isLocalDocker" class="field full">
               <label>platform 根目录</label>
@@ -438,16 +433,14 @@ export default {
                 <el-input v-model="fieldPaths.platformRoot" placeholder="如 /workspace/platform（含 public/device）" />
                 <el-button type="primary" plain size="small" @click="openPicker('platformRoot', 'dir')">浏览</el-button>
               </div>
-              <p class="hint-banner" style="margin:0.35rem 0 0">
-                同上：单层填 <code>.../platform</code>（其下有 <code>public</code>）；双层填 <code>.../platform/platform</code> 或外层 <code>.../platform</code>。
-              </p>
+              <p class="muted" style="margin:0.35rem 0 0">含 public / device 的目录。</p>
             </div>
             <div v-if="!isLocalDocker" class="field full">
               <label>市政水厂包目录（可选）</label>
               <div class="path-row">
                 <el-input
                   v-model="siteForm.paths.waterwork"
-                  placeholder="如 /workspace/sz-waterwork（独立包，非 platform 子目录）" />
+                  placeholder="独立包目录，非 platform 子目录" />
                 <el-button type="primary" plain size="small" @click="openPicker('waterworkDir', 'dir')">浏览</el-button>
               </div>
             </div>
@@ -456,7 +449,7 @@ export default {
               <div class="path-row">
                 <el-input
                   v-model="siteForm.paths.intelligentModel"
-                  placeholder="如 /workspace/wpg-intelligent-model-4.1.2（独立包）" />
+                  placeholder="独立包目录" />
                 <el-button type="primary" plain size="small" @click="openPicker('intelligentModelDir', 'dir')">浏览</el-button>
               </div>
             </div>
@@ -468,9 +461,6 @@ export default {
                   placeholder="如 middleware/docker_package/docker_package" />
                 <el-button type="primary" plain size="small" @click="openPicker('dockerPackage', 'dir')">浏览</el-button>
               </div>
-              <p class="hint-banner" style="margin:0.35rem 0 0">
-                含 <code>offline_install_docker.sh</code>、<code>docker-*.tgz</code> 的目录；浏览时带 <code>[docker]</code> 标记。
-              </p>
             </div>
             <div v-if="isLocalDocker" class="field full">
               <label>Base 包目录（可选，标准 base 或 middleware 根目录）</label>
@@ -481,33 +471,22 @@ export default {
             </div>
           </div>
 
-          <div v-show="siteEditMode === 'form' && siteSubStep === 3" class="field-grid">
-            <div v-if="!isLocalDocker" class="field full">
-              <el-button type="primary" plain size="small" @click="applyPathsFromMiddleware" :disabled="!fieldPaths.middlewareRoot">
-                按 middleware 根目录自动填充下方 workspace / nginxHtml
-              </el-button>
-            </div>
+          <div v-show="isLocalDocker && siteEditMode === 'form' && currentSiteSubStep.key === 'paths'" class="field-grid">
             <div class="field full">
               <label class="req">workspace 路径（工作簿根，其下 platform / middleware / docker_data）</label>
               <div class="path-row">
                 <el-input
                   v-model="siteForm.paths.workspace"
-                  :placeholder="isLocalDocker ? 'D:/workspace' : '/workspace'" />
+                  placeholder="D:/workspace" />
                 <el-button type="primary" plain size="small" @click="openPicker('pathsWorkspace', 'dir')">浏览</el-button>
-              </div>
-            </div>
-            <div class="field full">
-              <label class="req">nginxHtml（前端静态，= nginx/html）</label>
-              <div class="path-row">
-                <el-input
-                  v-model="siteForm.paths.nginxHtml"
-                  :placeholder="nginxHtmlPath || '/workspace/middleware/nginx/html'" />
-                <el-button type="primary" plain size="small" @click="openPicker('pathsNginxHtml', 'dir')">浏览</el-button>
               </div>
             </div>
           </div>
 
           <p v-if="siteSaveMsg" class="muted" style="color: var(--ok)">{{ siteSaveMsg }}</p>
+          <p v-else-if="siteEditMode === 'form'" class="muted" style="margin:0.35rem 0 0">
+            项目名、机器和中间件填齐后会自动写入 site.yaml，刷新浏览器不会丢。
+          </p>
           <p v-if="siteError && siteEditMode === 'form'" class="wizard-alert muted sub-step-error">{{ siteError }}</p>
           <div class="actions sub-step-nav" style="margin-top: 0.5rem">
             <template v-if="siteEditMode === 'form'">

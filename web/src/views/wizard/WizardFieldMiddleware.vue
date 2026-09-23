@@ -13,9 +13,14 @@ export default {
 <template>
         <div>
           <p class="wizard-step-purpose">{{ currentStepPurpose }}</p>
-          <div class="hint-banner">
-            <strong>步骤 4 / 8</strong> — 中间件多为 compose 部署（无 .env）。部署 Kafka 时会自动改
-            <code>KAFKA_ADVERTISED_LISTENERS</code>。部署 Nacos 后<strong>必须导入配置</strong>（选 nacos*.zip 上传，不解压），否则平台/水厂无法从 Nacos 拉配置。
+          <div class="field-grid" style="margin-bottom:0.75rem">
+            <div class="field full">
+              <label class="req">middleware 根目录</label>
+              <div class="path-row">
+                <el-input v-model="fieldPaths.middlewareRoot" placeholder="如 /workspace/middle 或 /workspace/middleware" />
+                <el-button type="primary" plain size="small" @click="openPicker('middlewareRoot', 'dir')">浏览</el-button>
+              </div>
+            </div>
           </div>
           <div class="actions" style="margin-bottom:0.75rem" :class="{ busy }">
             <el-button type="primary"
@@ -60,16 +65,14 @@ export default {
                   <span v-else-if="fieldModuleStatus.nacos" class="badge yellow">Nacos 已部署，尚未导入</span>
                   <span v-else class="badge yellow">先部署 Nacos，再导入</span>
                 </div>
-                <p class="muted" style="margin:0.35rem 0 0.65rem">
-                  部署 Nacos 之后必须把 <code>nacos*.zip</code> 上传导入（不解压）。跳过这一步，后面的平台、市政水厂都会报错。
-                </p>
+                <p class="muted" style="margin:0.35rem 0 0.65rem">须导入 nacos*.zip（不解压）。</p>
                 <div class="field full" style="margin-bottom:0.5rem">
                   <label class="req">nacos*.zip（可多选）</label>
                   <div class="path-row">
                     <el-input
                       :value="nacosConfigZipSummary"
                       readonly
-                      placeholder="未选择；点浏览勾选多个 nacos*.zip" />
+                      placeholder="未选择" />
                     <el-button type="primary" plain size="small" @click="openPicker('nacosConfigZips', 'nacos-zip')">浏览</el-button>
                     <el-button
                       type="warning"
@@ -96,9 +99,7 @@ export default {
               </div>
             </template>
           </div>
-          <div class="log-box" v-if="jobLogs.length" style="margin-top:1rem">
-            <div v-for="(l, i) in jobLogs" :key="'mw'+i" :class="logClass(l)">{{ l }}</div>
-          </div>
+          <JobLogBox :lines="jobLogs" :running="!!activeJobKey" />
           <div class="actions">
             <el-button plain @click="goToStep(2)">返回</el-button>
             <el-button type="primary"

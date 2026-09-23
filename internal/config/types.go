@@ -103,11 +103,11 @@ type Override struct {
 
 // PathsConfig 现场路径规划。
 type PathsConfig struct {
-	Workspace        string `yaml:"workspace" json:"workspace"` // 挂载盘工作簿根，现场默认 /workspace
+	Workspace        string `yaml:"workspace" json:"workspace"`           // 挂载盘工作簿根，现场默认 /workspace
 	Logs             string `yaml:"logs,omitempty" json:"logs,omitempty"` // 可选；各模块 compose 通常已挂载日志目录
-	NginxHTML        string `yaml:"nginxHtml" json:"nginxHtml"`
-	Waterwork        string `yaml:"waterwork,omitempty" json:"waterwork,omitempty"`               // 市政水厂包目录，如 waterwork-4.1.1
-	IntelligentModel string `yaml:"intelligentModel,omitempty" json:"intelligentModel,omitempty"` // 模型服务包目录，如 wpg-intelligent-model-4.1.2
+	NginxHTML        string `yaml:"nginxHtml,omitempty" json:"nginxHtml,omitempty"` // 可选；缺省等于 nginx 模块下的 html，向导不再单独填写
+	Waterwork        string `yaml:"waterwork,omitempty" json:"waterwork,omitempty"`               // 市政水厂包目录，由现场浏览选择
+	IntelligentModel string `yaml:"intelligentModel,omitempty" json:"intelligentModel,omitempty"` // 模型服务包目录，由现场浏览选择
 }
 
 // ---------------------------------------------------------------------------
@@ -366,9 +366,6 @@ func (c *SiteConfig) Validate() error {
 
 	if c.Paths.Workspace == "" {
 		errs = append(errs, "paths.workspace 不能为空")
-	}
-	if c.Paths.NginxHTML == "" {
-		errs = append(errs, "paths.nginxHtml 不能为空")
 	}
 
 	if len(errs) > 0 {

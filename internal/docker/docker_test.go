@@ -71,6 +71,38 @@ func TestParseDockerPsLine(t *testing.T) {
 	}
 }
 
+func TestParseDockerPsLine_ConfigFilesDirAndCommaLabels(t *testing.T) {
+	line := `{"ID":"bedb4c083438","Names":"emqx","Image":"emqx/emqx:4.3.12","State":"running","Status":"Up 3 hours","Ports":"0.0.0.0:1883->1883/tcp, 8081/tcp","CreatedAt":"2026-09-20 14:07:00 +0800 CST","Networks":"emqx_default","Labels":"com.docker.compose.project=emqx,com.docker.compose.service=emqx,com.docker.compose.project.config_files=/workspace/middleware/emqx/docker-compose.yml,/workspace/middleware/emqx/compose.override.yml"}`
+	s, err := parseDockerPsLine(line)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Project != "emqx" || s.Service != "emqx" {
+		t.Fatalf("project/service %+v", s)
+	}
+	if s.ComposeDir != "/workspace/middleware/emqx" {
+		t.Fatalf("compose dir %q", s.ComposeDir)
+	}
+}
+
+func TestParseComposePs_HostNetworkPublisher(t *testing.T) {
+	line := `{"ID":"d65f773173e6","Name":"platform-gateway-web","Service":"platform-gateway-web","State":"running","Status":"Up 2 hours","Image":"x","Project":"public","Labels":{"com.docker.compose.project.config_files":"/workspace/platform/platform/public/docker-compose.yml"},"Networks":["host"],"Publishers":[{"URL":"","TargetPort":8080,"PublishedPort":0,"Protocol":"tcp"}]}`
+	list, err := parseComposePs(line)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := list[0]
+	if s.ComposeDir != "/workspace/platform/platform/public" {
+		t.Fatalf("compose dir %q", s.ComposeDir)
+	}
+	if s.Networks != "host" {
+		t.Fatalf("networks %q", s.Networks)
+	}
+	if !strings.Contains(s.Ports, "8080/tcp") {
+		t.Fatalf("host ports %q", s.Ports)
+	}
+}
+
 func TestParseComposePs_NumericCreatedAndPublishers(t *testing.T) {
 	line := `{"ID":"def4567890ab","Name":"kafka-1","Service":"kafka","State":"running","Status":"Up 16 hours","Health":"","Image":"10.10.102.75/ops_dev/kafka:2.12-2.4.1","Created":1726639200,"Project":"middleware","Labels":{"com.docker.compose.project.working_dir":"/workspace/middleware/kafka"},"Networks":["middleware_default"],"Publishers":[{"URL":"0.0.0.0","TargetPort":9092,"PublishedPort":9092,"Protocol":"tcp"}]}`
 	list, err := parseComposePs(line)
@@ -111,4 +143,3 @@ func TestParseComposePs_ExitedCode(t *testing.T) {
 		t.Fatalf("created %q", list[0].Created)
 	}
 }
-

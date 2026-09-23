@@ -1,9 +1,11 @@
 ﻿<script>
 /** 本机联调向导：Init。 */
 import { useConsole } from '@/composables/useConsole.js'
+import WizardFirewallPanel from './WizardFirewallPanel.vue'
 
 export default {
   name: 'WizardLocalInit',
+  components: { WizardFirewallPanel },
   setup() {
     return useConsole()
   },
@@ -12,7 +14,8 @@ export default {
 
 <template>
         <div>
-          <p class="muted">将创建目录、按需安装 Docker、放行端口。多机场景会 SSH 分发到各节点。</p>
+          <p class="muted">创建目录、按需安装 Docker、启动防火墙（SSH 22、控制台 9527）。</p>
+          <WizardFirewallPanel />
           <div class="field-grid" style="margin-top:0.75rem">
             <div class="field full">
               <label class="req">Docker 离线安装目录</label>
@@ -35,9 +38,7 @@ export default {
             </el-button>
             <el-button plain @click="goToStep(1)">返回</el-button>
           </div>
-          <div class="log-box" v-if="jobLogs.length">
-            <div v-for="(l, i) in jobLogs" :key="i" :class="logClass(l)">{{ l }}</div>
-          </div>
+          <JobLogBox :lines="jobLogs" :running="!!activeJobKey" />
           <div class="actions" v-if="initDone">
             <el-button type="primary" @click="goToStep(3)">进入部署</el-button>
           </div>

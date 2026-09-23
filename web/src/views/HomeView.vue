@@ -70,14 +70,14 @@ export default {
               <span class="home-sop-idx">2</span>
               <div>
                 <strong>准备安装包</strong>
-                <p>middleware / platform 等目录放到约定路径；缺包时再开「一键部署」用包中心。</p>
+                <p>middleware / platform / sz-waterwork /model 等目录放到约定路径。</p>
               </div>
             </li>
             <li>
               <span class="home-sop-idx">3</span>
               <div>
                 <strong>按向导交付</strong>
-                <p>① 节点到 ⑧ 验收在向导里完成，不用记命令。</p>
+                <p>① 节点到 ⑧ 验收在向导里完成，不用记命令。熟练后可用「一键部署」（二期功能）</p>
               </div>
             </li>
           </template>

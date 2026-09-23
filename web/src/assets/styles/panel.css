@@ -94,9 +94,9 @@
 }
 
 .step.active {
-  background: linear-gradient(165deg, #1ac4b0 0%, var(--water) 58%, var(--water-deep) 100%);
+  background: linear-gradient(165deg, #3af0d6 0%, #12b5a2 55%, #0c9b8a 100%);
   border-color: transparent;
-  box-shadow: 0 8px 22px rgba(12, 155, 138, 0.32);
+  box-shadow: 0 10px 26px rgba(18, 181, 162, 0.48);
 }
 
 .step.active .title {
@@ -291,22 +291,22 @@
 }
 
 .badge.green {
-  color: #047857;
-  background: #d1fae5;
+  color: #065f46;
+  background: #6ee7b7;
 }
 .badge.yellow {
-  color: #b45309;
-  background: #fef3c7;
+  color: #92400e;
+  background: #fcd34d;
 }
 .badge.red {
-  color: #b91c1c;
-  background: #fee2e2;
+  color: #991b1b;
+  background: #fca5a5;
 }
 
 .log-box {
   margin-top: 1rem;
-  background: #152428;
-  color: #c9dbd7;
+  background: #0b1f24;
+  color: #e8f7f3;
   font-family: ui-monospace, "Cascadia Code", "Consolas", monospace;
   font-size: 0.82rem;
   line-height: 1.55;
@@ -322,8 +322,36 @@
   font: inherit;
 }
 
-.log-box .err { color: #f0a8a8; }
-.log-box .ok { color: #7dceb3; }
+.log-box .err { color: #ff8b8b; font-weight: 700; }
+.log-box .warn { color: #ffd15c; font-weight: 700; }
+.log-box .ok { color: #4df0c4; font-weight: 700; }
+
+/* 任务日志框：执行中角标贴右上，随内容滚动时仍可见。 */
+.job-log-box {
+  position: relative;
+  max-height: 360px;
+}
+
+.job-log-box.live {
+  box-shadow: 0 0 0 2px var(--water-glow), 0 10px 28px rgba(46, 240, 212, 0.28);
+}
+
+.job-log-running {
+  position: sticky;
+  top: 0;
+  float: right;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin: -0.4rem -0.4rem 0 0;
+  padding: 0.2rem 0.65rem;
+  border-radius: 999px;
+  background: var(--water-glow);
+  color: #04332d;
+  font-size: 0.76rem;
+  font-weight: 800;
+  font-family: var(--font-body);
+}
 
 .table {
   width: 100%;
@@ -374,13 +402,13 @@
 }
 
 .btn-active {
-  box-shadow: 0 0 0 2px var(--water-soft), 0 0 0 3px var(--water);
-  animation: pulse-active 1.2s ease-in-out infinite;
+  box-shadow: 0 0 0 3px var(--water-glow), 0 8px 20px rgba(46, 240, 212, 0.45) !important;
+  animation: pulse-active 1s ease-in-out infinite;
 }
 
 @keyframes pulse-active {
-  0%, 100% { box-shadow: 0 0 0 2px var(--water-soft), 0 0 0 3px var(--water); }
-  50% { box-shadow: 0 0 0 4px rgba(12, 155, 138, 0.18), 0 0 0 5px var(--water); }
+  0%, 100% { box-shadow: 0 0 0 3px var(--water-glow), 0 8px 20px rgba(46, 240, 212, 0.4); }
+  50% { box-shadow: 0 0 0 6px rgba(46, 240, 212, 0.28), 0 10px 26px rgba(46, 240, 212, 0.55); }
 }
 
 .wizard-step-purpose {
@@ -415,6 +443,15 @@
   margin: 0 0 0.65rem;
   font-size: 0.82rem;
   word-break: break-all;
+}
+
+.file-editor-dialog .file-editor-candidates {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0 0 0.65rem;
+  font-size: 0.82rem;
 }
 
 .file-editor-dialog .file-editor-body {

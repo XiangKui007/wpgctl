@@ -45,33 +45,17 @@ func TestHumanSize(t *testing.T) {
 	}
 }
 
-func TestIncludeFrontendDir(t *testing.T) {
-	cases := map[string]bool{
-		"/workspace/middleware/nginx":  true,
-		"/workspace/middleware/nginx/": true,
-		`D:\pkg\middleware\nginx`:      true,
-		"/workspace/middleware/kafka":  false,
-		"/workspace/waterwork-center":  false,
-		"":                             false,
-	}
-	for in, want := range cases {
-		if got := IncludeFrontendDir(in); got != want {
-			t.Errorf("IncludeFrontendDir(%q) = %v, want %v", in, got, want)
-		}
-	}
-}
-
 func TestSkipSyncRel(t *testing.T) {
-	if !SkipSyncRel("data", true, false) || !SkipSyncRel("logs", true, true) {
+	if !SkipSyncRel("data", true) || !SkipSyncRel("logs", true) {
 		t.Fatal("data/logs must always skip")
 	}
-	if SkipSyncRel("html/index.html", false, false) {
+	if SkipSyncRel("html/index.html", false) {
 		t.Fatal("files must not skip by name")
 	}
-	if !SkipSyncRel("html", true, false) || !SkipSyncRel("frontend", true, false) || !SkipSyncRel("dist", true, false) {
-		t.Fatal("frontend dirs must skip when not nginx")
+	if !SkipSyncRel("html", true) || !SkipSyncRel("frontend", true) || !SkipSyncRel("dist", true) {
+		t.Fatal("frontend dirs must never SSH-sync")
 	}
-	if SkipSyncRel("html", true, true) || SkipSyncRel("frontend", true, true) || SkipSyncRel("dist", true, true) {
-		t.Fatal("nginx sync must include frontend dirs")
+	if SkipSyncRel("conf", true) || SkipSyncRel("compose.yaml", false) {
+		t.Fatal("nginx conf / compose must still sync")
 	}
 }

@@ -3,7 +3,7 @@
 // 流程（每次调用都幂等）：
 //  1. SSH 连接目标机（root 直连；非 root 自动 sudo）；
 //  2. 上传 site.yaml 与本机同版本 wpgctl（已有同版本则跳过）；
-//  3. 目标机若无模块目录，则把主控机上的模块目录同步过去（跳过 data/logs；非 Nginx 模块还跳过 html/frontend/dist，前端只随 Nginx 到中间件机）；
+//  3. 目标机若无模块目录，则把主控机上的模块目录同步过去（跳过 data/logs 与前端静态 html/frontend/dist；前端由主控机 Nginx 部署）；
 //  4. 远端执行 `wpgctl module deploy|nginx ...`，输出逐行回传到控制台日志。
 package remotedeploy
 
@@ -33,6 +33,7 @@ type ModuleOptions struct {
 	PatchEnv     bool
 	ComposeUp    bool
 	ComposeBuild bool
+	SubService   string // 市政水厂 center / device
 	SyncFiles    bool // 目标机缺少模块目录时是否上传；false 则直接报错提示手工拷贝
 	ForceSync    bool // 即使目标机已有同路径目录也重新同步
 }
@@ -107,7 +108,7 @@ func RunModule(t Target, opts ModuleOptions, log func(string)) (*Result, error) 
 		return res, err
 	}
 
-	remoteDir, synced, err := ensureRemoteDir(sess, opts.ModuleDir, opts.SyncFiles, opts.ForceSync, sshx.IncludeFrontendDir(opts.ModuleDir), log)
+	remoteDir, synced, err := ensureRemoteDir(sess, opts.ModuleDir, opts.SyncFiles, opts.ForceSync, log)
 	if err != nil {
 		return res, err
 	}
@@ -130,6 +131,9 @@ func RunModule(t Target, opts ModuleOptions, log func(string)) (*Result, error) 
 			args = append(args, "--compose-up")
 		}
 	}
+	if s := strings.TrimSpace(opts.SubService); s != "" {
+		args = append(args, "--sub-service", s)
+	}
 
 	err = sess.RunWpgctl(args, func(line string) {
 		res.Lines++
@@ -141,7 +145,7 @@ func RunModule(t Target, opts ModuleOptions, log func(string)) (*Result, error) 
 	return res, nil
 }
 
-// RunNginx 在目标机执行 nginx 步骤。
+// RunNginx 在目标机执行 nginx 步骤（compose / conf）；html 前端静态不上传，由主控机 Nginx 部署。
 func RunNginx(t Target, opts NginxOptions, log func(string)) (*Result, error) {
 	if log == nil {
 		log = func(string) {}
@@ -161,7 +165,7 @@ func RunNginx(t Target, opts NginxOptions, log func(string)) (*Result, error) {
 	if err := sess.EnsureBinary(localVersionKey()); err != nil {
 		return res, err
 	}
-	remoteDir, synced, err := ensureRemoteDir(sess, opts.NginxDir, opts.SyncFiles, opts.ForceSync, true, log)
+	remoteDir, synced, err := ensureRemoteDir(sess, opts.NginxDir, opts.SyncFiles, opts.ForceSync, log)
 	if err != nil {
 		return res, err
 	}
@@ -197,8 +201,8 @@ func RunNginx(t Target, opts NginxOptions, log func(string)) (*Result, error) {
 }
 
 // ensureRemoteDir 目标机上准备模块目录：同路径已存在则直接用；否则按 syncFiles 决定上传或报错。
-// includeFrontend 为 true 时同步 html/frontend/dist（仅 Nginx）；其它模块跳过前端静态。
-func ensureRemoteDir(sess *sshx.Session, localDir string, syncFiles, force, includeFrontend bool, log func(string)) (string, bool, error) {
+// 前端静态 html/frontend/dist 一律不同步，由主控机 Nginx 部署。
+func ensureRemoteDir(sess *sshx.Session, localDir string, syncFiles, force bool, log func(string)) (string, bool, error) {
 	localDir = strings.TrimSpace(localDir)
 	if localDir == "" {
 		return "", false, fmt.Errorf("模块目录为空")
@@ -215,12 +219,8 @@ func ensureRemoteDir(sess *sshx.Session, localDir string, syncFiles, force, incl
 	if !syncFiles {
 		return "", false, fmt.Errorf("目标机 %s 上不存在 %s；请勾选「自动同步文件到目标机」或手工拷贝交付包后重试", sess.Node.IP, remote)
 	}
-	if includeFrontend {
-		log("同步含前端静态（html/frontend/dist）到 Nginx 所在中间件机")
-	} else {
-		log("跳过前端静态目录 html/frontend/dist（前端只部署到中间件机，由 Nginx 转发）")
-	}
-	if err := sess.SyncDirFilter(localDir, remote, includeFrontend); err != nil {
+	log("跳过前端静态目录 html/frontend/dist（前端由主控机 Nginx 部署，不经 SSH 分发）")
+	if err := sess.SyncDir(localDir, remote); err != nil {
 		return "", false, err
 	}
 	return remote, true, nil

@@ -15,12 +15,13 @@ export default defineConfig({
   build: {
     outDir: resolve(__dirname, '../internal/ui/dist'),
     emptyOutDir: true,
-    assetsDir: 'assets',
+    // 静态目录带产品名：现场经业务 Nginx 8877 反代时，根级 /assets 太通用易与其他前端撞路径
+    assetsDir: 'wpg-deploy-assets',
     rollupOptions: {
       output: {
-        chunkFileNames: 'assets/[name]-[hash].js',
-        entryFileNames: 'assets/[name]-[hash].js',
-        assetFileNames: 'assets/[name]-[hash][extname]',
+        chunkFileNames: 'wpg-deploy-assets/[name]-[hash].js',
+        entryFileNames: 'wpg-deploy-assets/[name]-[hash].js',
+        assetFileNames: 'wpg-deploy-assets/[name]-[hash][extname]',
         manualChunks(id) {
           if (!id.includes('node_modules')) return
           if (id.includes('codemirror') || id.includes('@codemirror')) return 'codemirror'
@@ -41,6 +42,7 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': 'http://127.0.0.1:9527',
+      '/wpg-deploy-api': 'http://127.0.0.1:9527',
     },
   },
 })

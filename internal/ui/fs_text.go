@@ -62,6 +62,7 @@ func (s *Server) getFSText(w http.ResponseWriter, abs string, find bool) {
 	var found []string
 	if isDotEnvPath(abs) {
 		found = findDotEnvFiles(searchRoot)
+		found = preferFilesMatchingHint(found, abs)
 		if len(found) == 0 {
 			if ex := findEnvExample(searchRoot); ex != "" {
 				data, err := os.ReadFile(ex)
@@ -204,6 +205,29 @@ var skipEnvWalkDirs = map[string]bool{
 
 func findDotEnvFiles(root string) []string {
 	return findNamedFiles(root, ".env", 4)
+}
+
+// preferFilesMatchingHint 编辑 waterwork-device/.env 时，优先打开路径里带 device 的那份，而不是字典序第一份 center。
+func preferFilesMatchingHint(found []string, hintAbs string) []string {
+	if len(found) <= 1 {
+		return found
+	}
+	hintDir := strings.ToLower(filepath.Base(filepath.Dir(filepath.Clean(hintAbs))))
+	if hintDir == "" || hintDir == "." || hintDir == ".env" {
+		return found
+	}
+	var prefer, rest []string
+	for _, p := range found {
+		if strings.Contains(strings.ToLower(filepath.ToSlash(p)), strings.ToLower(hintDir)) {
+			prefer = append(prefer, p)
+		} else {
+			rest = append(rest, p)
+		}
+	}
+	if len(prefer) == 0 {
+		return found
+	}
+	return append(prefer, rest...)
 }
 
 func findEnvExample(root string) string {

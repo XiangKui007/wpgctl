@@ -32,11 +32,11 @@
   padding-left: 1.2rem;
   padding-right: 1.2rem;
   font-weight: 700;
-  box-shadow: 0 8px 18px rgba(12, 155, 138, 0.3);
+  box-shadow: 0 8px 20px rgba(18, 181, 162, 0.42);
 }
 
 .panel-wizard .actions > .el-button--primary:not(.is-plain):hover {
-  box-shadow: 0 10px 22px rgba(12, 155, 138, 0.38);
+  box-shadow: 0 10px 24px rgba(46, 240, 212, 0.45);
 }
 
 .el-button.btn-active {

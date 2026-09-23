@@ -22,6 +22,19 @@ export default {
         </div>
         <div class="topbar-tools">
           <el-tag
+            v-if="activeJobKey"
+            class="job-pill"
+            size="small"
+            type="primary"
+            effect="dark"
+            round
+            :title="'点击回到任务页面看日志（' + activeJobView + '）'"
+            @click="goActiveJob"
+          >
+            <el-icon class="is-loading"><Loading /></el-icon>
+            {{ activeJobLabel }} · {{ jobElapsedText }}
+          </el-tag>
+          <el-tag
             v-if="runtimeOS"
             class="env-tag"
             size="small"
@@ -66,7 +79,7 @@ export default {
           <a
             v-if="settings.advancedMode"
             class="el-button el-button--small el-button--primary is-plain"
-            href="/api/deliveries/export"
+            href="/wpg-deploy-api/deliveries/export"
           >导出摘要</a>
         </div>
       </div>

@@ -5,7 +5,7 @@
 import { computed, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { api } from '@/api/http.js'
+import { api, apiPath } from '@/api/http.js'
 import {
   ALL_SERVICE_IDS,
   ALL_SINGLE_ROLES,
@@ -20,16 +20,19 @@ import {
   PERSIST_FIELD_KEYS,
   PERSIST_FORM_KEYS,
   SERVICE_PROFILE,
-  MIDDLEWARE_ANCHOR_IDS,
+  WATERWORK_SUBSERVICES,
 } from '@/constants/catalog.js'
 import {
   elTagType,
+  formatBytes,
   formatTime,
   fsEntryIcon,
-  inferWorkspaceFromMiddleware as inferWorkspaceRoot,
   isEditableConfigFile,
   joinPath,
   logClass,
+  stripAnsi,
+  resolveWorkbookFromParent,
+  isWorkbookRoot,
   zipBaseName,
 } from '@/utils/format.js'
 import {
@@ -41,6 +44,7 @@ import {
   svcImage,
   svcName,
   svcNetworks,
+  svcIsHostNetwork,
   svcPortChips,
   svcPorts,
   svcProject,
@@ -97,34 +101,48 @@ const workspaceProbe = ref(null)
 const workspaceMsg = ref('')
 const workspaceBusy = ref('')
 
-/** 现场工作簿根：Linux 为 /workspace（其下 platform、middleware/middle、sz-waterwork、docker_data）；本机 Docker 为 D:/workspace。 */
+/** 开始前：用户选择的父目录。Linux 默认 `/`，本机 Docker 默认 `D:/`。 */
+function defaultParentPath() {
+  return isLocalDocker.value ? 'D:/' : '/'
+}
+
+/** 工作簿根：父目录下的 workspace。Linux 为 /workspace，本机 Docker 为 D:/workspace。 */
 function defaultWorkspacePath() {
   return isLocalDocker.value ? 'D:/workspace' : '/workspace'
 }
+
+/** 根据开始前输入框解析将要创建/使用的工作簿路径。 */
+const resolvedWorkbookPath = computed(() =>
+  resolveWorkbookFromParent(siteForm.paths.workspace || defaultParentPath(), defaultWorkspacePath()),
+)
 
 function goDeployEntry() {
   if (isLocalDocker.value) {
     goWizard()
     return
   }
+  const stayingInWizard = view.value === 'wizard'
   loadSite().finally(() => {
     if (siteFileExists.value && (maxReachedStep.value > 0 || fieldStepDone.site)) {
       view.value = 'wizard'
       return
     }
+    // 正在 ① 填写/刚保存：顶栏再点「部署向导」不能踢回开始前。
+    if (stayingInWizard) return
     view.value = 'preflight'
     workspaceMsg.value = ''
     workspaceProbe.value = null
-    if (!siteForm.paths.workspace) siteForm.paths.workspace = defaultWorkspacePath()
+    // 开始前固定落到父目录（默认 /），不要把草稿/site 里的交付包路径填进来。
+    siteForm.paths.workspace = defaultParentPath()
   })
 }
 
-/** 开始前：缺目录就建、已有就跳过，然后进入向导（不再让人在检查/创建/进入之间选择）。 */
+/** 开始前：所选目录下没有 workspace 就建、已有就跳过，然后进入向导。 */
 async function initWorkspaceAndEnter() {
-  if (!siteForm.paths.workspace) siteForm.paths.workspace = defaultWorkspacePath()
-  const ws = (siteForm.paths.workspace || '').trim()
+  const parent = (siteForm.paths.workspace || '').trim() || defaultParentPath()
+  const ws = resolveWorkbookFromParent(parent, defaultWorkspacePath())
   if (!ws) {
-    workspaceMsg.value = '请填写 workspace 路径'
+    workspaceMsg.value = '请填写初始化根目录'
     return
   }
   workspaceBusy.value = 'init'
@@ -133,11 +151,11 @@ async function initWorkspaceAndEnter() {
     const res = await api('/api/workspace', {
       method: 'POST',
       body: JSON.stringify({
-        workspace: ws,
-        nginxHtml: (siteForm.paths.nginxHtml || '').trim() || undefined,
+        workspace: parent,
       }),
     })
     workspaceProbe.value = res.probe
+    siteForm.paths.workspace = (res.probe && res.probe.workspace) || ws
     const n = (res.created || []).length
     workspaceMsg.value = n ? `已创建 ${n} 个目录。` : '目录已存在，跳过创建。'
     // 开始前只建目录；site.yaml 要等①填完节点/中间件后再保存，这里 PUT 会因空 IP、空密码被校验拒绝。
@@ -288,7 +306,7 @@ function wizardProgressSnapshot() {
   }
 }
 
-/** 清空向导部署进度。路径草稿可留；步骤完成态不能在 site.yaml 消失后继续显示。 */
+/** 清空向导部署进度。步骤完成态不能在 site.yaml 消失后继续显示。 */
 function resetWizardProgress({ announce = false } = {}) {
   const had = hasWizardProgress()
   Object.assign(fieldStepDone, emptyFieldStepDone())
@@ -298,6 +316,7 @@ function resetWizardProgress({ announce = false } = {}) {
   siteSubStepReached.value = 0
   nacosImportDone.value = false
   nginxPatchDone.value = false
+  nginxRuntime.value = null
   verifyDone.value = false
   verifyReport.value = null
   initDone.value = false
@@ -309,6 +328,41 @@ function resetWizardProgress({ announce = false } = {}) {
   if (announce && had) {
     notify('site.yaml 已不存在，向导进度已重置，请从①重新保存配置。', 'warn')
   }
+}
+
+/**
+ * resetSiteFormBlank site.yaml 不存在时清掉表单里的旧项目名/节点，只留标准账号密码。
+ */
+function resetSiteFormBlank() {
+  siteForm.site.name = ''
+  siteForm.site.code = ''
+  siteForm.nodes.splice(
+    0,
+    siteForm.nodes.length,
+    defaultNode('app-node', '127.0.0.1', ALL_SINGLE_ROLES, ALL_SERVICE_IDS),
+  )
+  siteForm.middleware.nacos.host = '127.0.0.1'
+  siteForm.middleware.nacos.port = 8848
+  siteForm.middleware.mysql.disabled = false
+  siteForm.middleware.mysql.host = '127.0.0.1'
+  siteForm.middleware.mysql.port = 3306
+  siteForm.middleware.pgsql.host = '127.0.0.1'
+  siteForm.middleware.pgsql.port = DEFAULT_CREDS.pgsqlPort
+  siteForm.middleware.redis.host = '127.0.0.1'
+  siteForm.middleware.redis.port = 6377
+  siteForm.middleware.kafka.host = '127.0.0.1'
+  siteForm.middleware.kafka.port = 9092
+  siteForm.paths.workspace = ''
+  siteForm.paths.nginxHtml = ''
+  siteForm.paths.waterwork = ''
+  siteForm.paths.intelligentModel = ''
+  applyDefaultCreds(true)
+  siteFormDirty = false
+}
+
+/** markSiteFileExists PUT 成功后立刻记下磁盘已有文件，避免 hash 守卫把向导踢回开始前。 */
+function markSiteFileExists() {
+  siteFileExists.value = true
 }
 const verifyReport = ref(null)
 const verifyDone = ref(false)
@@ -323,6 +377,8 @@ const fieldPaths = reactive({
 })
 const fieldModuleStatus = reactive({})
 const nginxPatchDone = ref(false)
+/** 本机该 nginx compose 的运行探测；deployed 为真时可跳过部署。 */
+const nginxRuntime = ref(null)
 const nacosImportDone = ref(false)
 const standaloneModules = computed(() =>
   fieldModules.standalone.filter((m) => (siteForm.paths[m.pathKey] || '').trim()),
@@ -343,14 +399,45 @@ const deployableMiddlewareModules = computed(() =>
   fieldModules.middleware.filter((m) => isServiceEnabled(m.name)),
 )
 
+const deployableBusinessModules = computed(() =>
+  fieldModules.business.filter((m) => isServiceEnabled(m.name)),
+)
+
+/** 已填目录且已勾选的市政/模型部署项：水厂拆成 center → device，再跟模型。 */
+const deployableStandaloneJobs = computed(() => {
+  const out = []
+  for (const m of fieldModules.standalone) {
+    const dir = (siteForm.paths[m.pathKey] || '').trim()
+    if (!dir || !isServiceEnabled(m.name)) continue
+    if (m.name === 'waterwork') {
+      for (const sub of WATERWORK_SUBSERVICES) {
+        out.push({ pathKey: m.pathKey, name: m.name, subService: sub.id, label: sub.label })
+      }
+    } else {
+      out.push({ pathKey: m.pathKey, name: m.name, label: m.label })
+    }
+  }
+  return out
+})
+
+/**
+ * 模块目录解析缓存：key = phase/name → 后端 ModulePath 按实际套层解出的路径。
+ * 列表上直接显示真实目录，不再拼「a/public（或 a/a/public）」这种猜测。
+ */
+const resolvedModuleDirs = reactive({})
+
 const busy = ref(false)
 const activeJobKey = ref('')
-const fileEditor = reactive({ path: '', text: '', loading: false, msg: '' })
+const fileEditor = reactive({ path: '', text: '', loading: false, msg: '', candidates: [] })
 const jobLogs = ref([])
 const precheckItems = ref([])
 const precheckDone = ref(false)
 const precheckBlocked = ref(false)
 const initDone = ref(false)
+const firewallStatus = ref(null)
+const firewallStatusError = ref('')
+const firewallChecking = ref(false)
+const firewallNodeIndex = ref(0)
 const deployDone = ref(false)
 const preview = ref(null)
 const smokeRows = ref([])
@@ -379,6 +466,7 @@ function clearStatusQuery() {
 }
 const deployments = ref([])
 const logService = ref('')
+const logNodeIP = ref('local')
 const liveLogs = ref('')
 let logWs = null
 let jobWs = null
@@ -431,10 +519,96 @@ const settings = reactive({
 
 const busyText = computed(() => {
   if (workspaceBusy.value === 'init') return '正在初始化目录…'
-  if (activeJobKey.value === 'nacos-import') return '正在导入 Nacos 配置…'
-  if (activeJobKey.value) return '任务执行中，请稍候…'
+  if (activeJobKey.value) return activeJobLabel.value + '…'
   return '处理中…'
 })
+
+/**
+ * panelBusy 只在「短操作、没有任务日志」时为真：保存 site.yaml、建目录、探测等。
+ * 长任务（有 activeJobKey）不再遮罩，让现场人员直接看日志框。
+ */
+const panelBusy = computed(() => busy.value && !activeJobKey.value)
+
+/** 任务键前缀 → 顶栏标签文案。模块部署的键形如 middleware-redis / business-public。 */
+const JOB_LABELS = {
+  init: '安装 Docker',
+  precheck: '环境体检',
+  deploy: '一键部署',
+  'database-all': '一键部署数据库',
+  'middleware-all': '一键部署中间件',
+  'business-all': '一键部署平台业务',
+  'standalone-all': '一键部署市政/模型',
+  'db-apply': '执行 SQL',
+  'nacos-import': '导入 Nacos 配置',
+  'nginx-patch': '部署 Nginx',
+  verify: '验收',
+  fetch: '拉取安装包',
+  upgrade: '升级',
+  rollback: '回滚',
+  'expand-platform': '解压 platform 包',
+  'firewall-start': '启动防火墙',
+  'firewall-reload': 'reload 防火墙',
+}
+
+const JOB_PHASE_LABELS = {
+  database: '部署数据库',
+  middleware: '部署中间件',
+  business: '部署平台',
+  std: '部署独立包',
+}
+
+/** activeJobLabel 当前任务的中文名，供顶栏标签与局部 loading 文案。 */
+const activeJobLabel = computed(() => {
+  const key = String(activeJobKey.value || '')
+  if (!key) return ''
+  if (JOB_LABELS[key]) return JOB_LABELS[key]
+  const dash = key.indexOf('-')
+  if (dash > 0) {
+    const phase = key.slice(0, dash)
+    const name = key.slice(dash + 1)
+    if (JOB_PHASE_LABELS[phase]) return `${JOB_PHASE_LABELS[phase]} ${name}`
+  }
+  return '任务执行中'
+})
+
+/** 任务开始时间与已用秒数；顶栏「任务进行中 · 1m32s」用。 */
+const jobStartedAt = ref(0)
+const jobElapsedSec = ref(0)
+/** 任务发起时所在页面；点顶栏标签跳回去看日志。 */
+const activeJobView = ref('')
+let jobClockTimer = 0
+
+watch(activeJobKey, (key, prev) => {
+  if (key && !prev) {
+    jobStartedAt.value = Date.now()
+    jobElapsedSec.value = 0
+    activeJobView.value = view.value
+    clearInterval(jobClockTimer)
+    jobClockTimer = window.setInterval(() => {
+      jobElapsedSec.value = Math.floor((Date.now() - jobStartedAt.value) / 1000)
+    }, 1000)
+  } else if (!key && prev) {
+    clearInterval(jobClockTimer)
+    jobClockTimer = 0
+  }
+})
+
+const jobElapsedText = computed(() => {
+  const s = jobElapsedSec.value
+  if (s < 60) return `${s}s`
+  const m = Math.floor(s / 60)
+  const rest = s % 60
+  if (m < 60) return `${m}m${String(rest).padStart(2, '0')}s`
+  const h = Math.floor(m / 60)
+  return `${h}h${String(m % 60).padStart(2, '0')}m`
+})
+
+/** goActiveJob 回到发起任务的页面看日志（顶栏标签点击）。 */
+function goActiveJob() {
+  const target = activeJobView.value
+  if (!target || !VIEWS.includes(target)) return
+  if (view.value !== target) view.value = target
+}
 
 const picker = reactive({
   open: false,
@@ -446,7 +620,15 @@ const picker = reactive({
   selected: [],
   error: '',
   expandMsg: '',
+  expandHint: '',
   expanding: false,
+  expandLogs: [],
+  expandPercent: 0,
+  expandPackPercent: 0,
+  expandPackTotal: 0,
+  expandStatus: '',
+  expandDetail: '',
+  hint: { level: '', title: '', headline: '', message: '', enter: [], marks: [] },
 })
 
 const nacosConfigZipList = computed(() =>
@@ -548,6 +730,9 @@ const runtimeOS = ref('')
 const runtimeArch = ref('')
 const dockerOk = ref(null)
 const dockerMsg = ref('')
+/** 各机器 Docker 是否启动，按 IP 索引，挂在机器名称后面。 */
+const nodeDockerByIP = reactive({})
+const nodeDockerBusy = ref(false)
 const deployHint = ref('')
 
 const siteName = computed(() => {
@@ -561,18 +746,20 @@ const siteCode = computed(() => {
   return p.site?.code || p.Site?.Code || p.Site?.code || '—'
 })
 const siteLoaded = computed(() => !!site.value)
-const reportUrl = computed(() => (reportId.value ? `/api/report?id=${encodeURIComponent(reportId.value)}` : '/api/report'))
+const reportUrl = computed(() =>
+  apiPath(reportId.value ? `/api/report?id=${encodeURIComponent(reportId.value)}` : '/api/report'),
+)
 const isLocalDocker = computed(() => settings.scenario === 'windows')
 
 const nginxHtmlPath = computed(() => {
-  const base = fieldPaths.nginxDir || (fieldPaths.middlewareRoot ? joinPath(fieldPaths.middlewareRoot, 'nginx') : '')
+  const base = fieldPaths.nginxDir
   if (!base) return ''
   return joinPath(base, 'html')
 })
 
 const nginxWebConfPath = computed(() => {
-  const base = fieldPaths.nginxDir || (fieldPaths.middlewareRoot ? joinPath(fieldPaths.middlewareRoot, 'nginx') : '')
-  if (!base) return 'middleware/nginx/conf/conf.d/http-web-8877.conf'
+  const base = fieldPaths.nginxDir
+  if (!base) return 'middle/middle/nginx/conf/conf.d/http-web-8877.conf'
   return joinPath(joinPath(base, 'conf'), 'conf.d/http-web-8877.conf').replace(/\\/g, '/')
 })
 /** 首页主文案：突出快速部署、少命令、好上手，而不是审计/回滚 SOP。 */
@@ -604,8 +791,8 @@ const envChipText = computed(() => {
   const modeTag = isLocalDocker.value ? '本机' : '现场'
   const osTag = runtimeOS.value === 'windows' ? 'Windows' : runtimeOS.value ? 'Linux' : ''
   let dockerTag = ''
-  if (dockerOk.value === true) dockerTag = runtimeOS.value === 'windows' ? 'Desktop 就绪' : 'Docker 就绪'
-  else if (dockerOk.value === false) dockerTag = runtimeOS.value === 'windows' ? 'Desktop 未就绪' : 'Docker 未就绪'
+  if (dockerOk.value === true) dockerTag = runtimeOS.value === 'windows' ? '本机 Desktop 就绪' : '本机 Docker 就绪'
+  else if (dockerOk.value === false) dockerTag = runtimeOS.value === 'windows' ? '本机 Desktop 未就绪' : '本机 Docker 未就绪'
   return [modeTag, osTag, dockerTag].filter(Boolean).join(' · ')
 })
 
@@ -618,6 +805,39 @@ const primaryNodeIP = computed(() => siteForm.nodes[0]?.ip || '127.0.0.1')
 const isMultiNode = computed(
   () => !isLocalDocker.value && deployTopology.value === 'multi' && siteForm.nodes.length > 1,
 )
+
+/**
+ * logNodeOptions 日志页节点下拉：本机 + 从机 IP。
+ * @returns {{ value: string, label: string }[]}
+ */
+const logNodeOptions = computed(() => {
+  const opts = [{ value: 'local', label: '本机 Docker' }]
+  const seen = new Set(['local'])
+  const add = (ip, name) => {
+    const v = String(ip || '').trim()
+    if (!v || seen.has(v)) return
+    seen.add(v)
+    opts.push({ value: v, label: name ? `${name} · ${v}` : v })
+  }
+  for (const n of statusNodes.value || []) {
+    if (n.local) continue
+    add(n.ip, n.name)
+  }
+  if (opts.length === 1) {
+    for (const n of siteForm.nodes || []) {
+      const ip = String(n.ip || '').trim()
+      if (ip === '127.0.0.1' || ip === 'localhost') continue
+      add(ip, n.name)
+    }
+  }
+  return opts
+})
+
+const isRemoteLogNode = computed(() => {
+  const v = String(logNodeIP.value || '').trim()
+  return !!v && v !== 'local'
+})
+
 
 function isStepDone(key) {
   if (key === 'site') return fieldStepDone.site
@@ -653,16 +873,14 @@ function stepTabClass(i) {
 
 async function prepareSiteStep({ requireDocker = false } = {}) {
   if (siteEditMode.value === 'form') {
+    if (!isLocalDocker.value) ensureWorkspaceRoot()
     await saveSiteFormOnly()
   } else {
     await api('/api/site', {
       method: 'PUT',
       body: JSON.stringify({ yaml: siteYaml.value }),
     })
-  }
-  if (!fieldPaths.middlewareRoot) {
-    siteError.value = '请填写 middleware 根目录'
-    return false
+    markSiteFileExists()
   }
   if (requireDocker && !form.dockerPackage) {
     siteError.value = '请填写 Docker 离线安装目录'
@@ -671,7 +889,7 @@ async function prepareSiteStep({ requireDocker = false } = {}) {
   fieldStepDone.site = true
   fieldPaths.gatewayIP = fieldPaths.gatewayIP || primaryNodeIP.value
   if (!fieldPaths.nginxDir && fieldPaths.middlewareRoot) {
-    fieldPaths.nginxDir = await resolveNestedModulePath(fieldPaths.middlewareRoot, 'nginx')
+    fieldPaths.nginxDir = await resolveNginxModuleDir()
   }
   return true
 }
@@ -686,7 +904,13 @@ function applyWizardStep(i) {
 
 async function goToStep(i, opts = {}) {
   if (i === wizardStep.value) return
-  if (!isLocalDocker.value && siteHydrated) {
+  // 从 ① 点前进要先保存，不能把「尚未落盘」当成文件丢失而拦掉。
+  const savingFromSite =
+    i > wizardStep.value &&
+    wizardStep.value === 0 &&
+    !fieldStepDone.site &&
+    !isLocalDocker.value
+  if (!isLocalDocker.value && siteHydrated && !savingFromSite) {
     await refreshSitePresence()
     if (!siteFileExists.value && i > 0) {
       siteError.value = 'site.yaml 已不存在，请从①重新保存配置。'
@@ -699,12 +923,7 @@ async function goToStep(i, opts = {}) {
   }
 
   // 从站点配置 Tab 点前进：等同保存并解锁（不必先点底部按钮）
-  if (
-    i > wizardStep.value &&
-    wizardStep.value === 0 &&
-    !fieldStepDone.site &&
-    !isLocalDocker.value
-  ) {
+  if (savingFromSite) {
     busy.value = true
     try {
       const ok = await prepareSiteStep()
@@ -752,6 +971,65 @@ function applyFieldPaths(saved) {
   if (!saved || typeof saved !== 'object') return
   for (const k of PERSIST_FIELD_KEYS) if (saved[k]) fieldPaths[k] = saved[k]
   for (const k of PERSIST_FORM_KEYS) if (saved['form.' + k]) form[k] = saved['form.' + k]
+}
+
+/**
+ * existingPaths 询问本机哪些路径还在磁盘上。
+ * @param {string[]} paths
+ * @returns {Promise<Set<string>>}
+ */
+async function existingPaths(paths) {
+  const list = [...new Set((paths || []).map((p) => String(p || '').trim()).filter(Boolean))]
+  if (!list.length) return new Set()
+  try {
+    const res = await api('/api/fs/exists', {
+      method: 'POST',
+      body: JSON.stringify({ paths: list }),
+    })
+    const m = res.exists || {}
+    return new Set(Object.keys(m).filter((k) => m[k]))
+  } catch {
+    return new Set(list)
+  }
+}
+
+/**
+ * pruneMissingLocalPaths 清掉已删除目录的残留填写（settings / 草稿 / site 表单）。
+ * 重打包不会清 ~/.wpgctl 和浏览器 localStorage，所以启动时必须按磁盘再核对一遍。
+ */
+async function pruneMissingLocalPaths() {
+  const zips = String(fieldPaths.nacosConfigZips || '')
+    .split('\n')
+    .map((s) => s.trim())
+    .filter(Boolean)
+  const sqls = (sqlApplyFiles.value || []).map((p) => String(p || '').trim()).filter(Boolean)
+  const ok = await existingPaths([
+    fieldPaths.middlewareRoot,
+    fieldPaths.platformRoot,
+    fieldPaths.nginxDir,
+    form.dockerPackage,
+    form.package,
+    form.base,
+    form.manifest,
+    siteForm.paths.waterwork,
+    siteForm.paths.intelligentModel,
+    siteForm.paths.nginxHtml,
+    ...zips,
+    ...sqls,
+  ])
+  const keep = (v) => !String(v || '').trim() || ok.has(String(v).trim())
+  if (!keep(fieldPaths.middlewareRoot)) fieldPaths.middlewareRoot = ''
+  if (!keep(fieldPaths.platformRoot)) fieldPaths.platformRoot = ''
+  if (!keep(fieldPaths.nginxDir)) fieldPaths.nginxDir = ''
+  if (!keep(form.dockerPackage)) form.dockerPackage = ''
+  if (!keep(form.package)) form.package = ''
+  if (!keep(form.base)) form.base = ''
+  if (!keep(form.manifest)) form.manifest = ''
+  if (!keep(siteForm.paths.waterwork)) siteForm.paths.waterwork = ''
+  if (!keep(siteForm.paths.intelligentModel)) siteForm.paths.intelligentModel = ''
+  if (!keep(siteForm.paths.nginxHtml)) siteForm.paths.nginxHtml = ''
+  fieldPaths.nacosConfigZips = zips.filter((p) => ok.has(p)).join('\n')
+  sqlApplyFiles.value = sqls.filter((p) => ok.has(p))
 }
 
 async function loadSettings() {
@@ -865,19 +1143,24 @@ async function loadSite() {
     const exists = !!data.exists
     // 只在「曾经有文件、现在没了」时清进度。首次填写尚无 site.yaml 时不能清，否则改一台/多台会跳回项目信息。
     if (!exists) {
-      if (siteFileExists.value) resetWizardProgress({ announce: true })
+      if (siteFileExists.value) {
+        resetWizardProgress({ announce: true })
+        resetSiteFormBlank()
+      } else if (!siteHydrated) {
+        applyDefaultCreds(true)
+      }
       siteFileExists.value = false
     } else {
       siteFileExists.value = true
-    }
-    if (exists && data.parsed) {
-      fillSiteForm(data.parsed)
-      fieldStepDone.site = true
-      maxReachedStep.value = Math.max(maxReachedStep.value, 1)
-      // 已有配置：各小步均可直接点选查看/修改
-      siteSubStepReached.value = siteSubSteps.value.length - 1
-    } else if (!siteHydrated) {
-      applyDefaultCreds(true)
+      if (data.parsed) {
+        fillSiteForm(data.parsed)
+        fieldStepDone.site = true
+        maxReachedStep.value = Math.max(maxReachedStep.value, 1)
+        // 已有配置：各小步均可直接点选查看/修改
+        siteSubStepReached.value = siteSubSteps.value.length - 1
+      } else if (!siteHydrated) {
+        applyDefaultCreds(true)
+      }
     }
     if (data.error) {
       siteError.value = data.error
@@ -890,8 +1173,12 @@ async function loadSite() {
     const disappeared = siteFileExists.value
     siteFileExists.value = false
     siteError.value = e.message
-    if (disappeared) resetWizardProgress({ announce: true })
-    if (!siteHydrated) applyDefaultCreds(true)
+    if (disappeared) {
+      resetWizardProgress({ announce: true })
+      resetSiteFormBlank()
+    } else if (!siteHydrated) {
+      applyDefaultCreds(true)
+    }
   }
 }
 
@@ -899,24 +1186,35 @@ async function loadSite() {
 async function refreshSitePresence() {
   if (!siteHydrated) return
   try {
+    const knownExists = siteFileExists.value
     const data = await api('/api/site')
     const exists = !!data.exists
-    if (exists === siteFileExists.value) return
-    if (!exists) {
-      siteFileExists.value = false
-      resetWizardProgress({ announce: true })
-      persistDraftSoon()
-      persistSessionSoon()
+    if (exists) {
+      if (!siteFileExists.value) await loadSite()
       return
     }
-    await loadSite()
+    // GET 说没有文件：只有发出请求前就认为有文件，才算丢失（期间 PUT 成功则不能清）。
+    if (!knownExists) return
+    siteFileExists.value = false
+    resetWizardProgress({ announce: true })
+    resetSiteFormBlank()
+    persistDraftSoon()
+    persistSessionSoon()
   } catch {
     /* 探测失败不打断当前页 */
   }
 }
 
 function onSiteVisibility() {
+  if (document.visibilityState === 'hidden') {
+    flushSitePersist()
+    return
+  }
   if (document.visibilityState === 'visible') refreshSitePresence()
+}
+
+function onPageHide() {
+  flushSitePersist()
 }
 
 function fillSiteForm(parsed) {
@@ -1139,33 +1437,24 @@ function serviceNode(serviceId) {
 }
 
 /**
- * middlewareAnchorIndex 中间件锚点机器：优先 Nacos，其次 Kafka 等。
- * Nginx 与前端静态钉在这台，不随业务服务分发到其它节点。
- * @returns {number}
+ * primaryNodeLabel 主控机（节点表第一行）展示名。Nginx / 前端固定部署在这台。
+ * @returns {string}
  */
-function middlewareAnchorIndex() {
-  for (const id of MIDDLEWARE_ANCHOR_IDS) {
-    const idx = serviceAssignments[id]
-    if (idx != null && idx >= 0 && siteForm.nodes[idx]) return idx
-  }
-  return 0
-}
-
-const middlewareAnchorLabel = computed(() => {
-  const n = siteForm.nodes[middlewareAnchorIndex()]
-  if (!n) return '中间件所在机器（前端同机）'
-  return `${n.name || '中间件机'} · ${n.ip || '未填 IP'}（前端同机）`
+const primaryNodeLabel = computed(() => {
+  const n = siteForm.nodes[0]
+  if (!n) return '主控机（Nginx / 前端）'
+  return `${n.name || '主控机'} · ${n.ip || '未填 IP'}（Nginx / 前端）`
 })
 
-/** pinNginxToMiddleware 把 Nginx/前端固定到中间件机；「不部署」保持不变。 */
-function pinNginxToMiddleware() {
+/** pinNginxToPrimary 把 Nginx/前端固定到主控机；「不部署」保持不变。 */
+function pinNginxToPrimary() {
   if (!isMultiNode.value) return
   if (serviceAssignments.nginx === -1) return
-  serviceAssignments.nginx = middlewareAnchorIndex()
+  serviceAssignments.nginx = 0
 }
 
 function syncServiceAssignments(showMessage = true) {
-  pinNginxToMiddleware()
+  pinNginxToPrimary()
   const mysqlNode = serviceNode('mysql')
   const pgsqlNode = serviceNode('pgsql')
   const redisNode = serviceNode('redis')
@@ -1288,7 +1577,7 @@ function buildFormPayload() {
     },
     paths: {
       workspace: siteForm.paths.workspace,
-      nginxHtml: siteForm.paths.nginxHtml,
+      nginxHtml: nginxHtmlPath.value || siteForm.paths.nginxHtml || undefined,
       waterwork: siteForm.paths.waterwork || undefined,
       intelligentModel: siteForm.paths.intelligentModel || undefined,
     },
@@ -1324,10 +1613,14 @@ function siteFormReadyToPersist() {
     if (!siteForm.nodes[0]?.ip?.trim()) return false
   }
   const mw = siteForm.middleware
-  if (!(mw.nacos.password || '').trim()) return false
-  if (!mw.mysql.disabled && (!(mw.mysql.user || '').trim() || !(mw.mysql.password || '').trim())) return false
+  if (!(mw.nacos.host || '').trim() || !(mw.nacos.password || '').trim()) return false
+  if (!mw.mysql.disabled) {
+    if (!(mw.mysql.host || '').trim() || !(mw.mysql.user || '').trim() || !(mw.mysql.password || '').trim()) return false
+  }
   if (!(mw.pgsql.user || '').trim() || !(mw.pgsql.password || '').trim()) return false
-  if (!(mw.redis.password || '').trim()) return false
+  if (!(mw.redis.host || '').trim() || !(mw.redis.password || '').trim()) return false
+  if (!(mw.kafka.host || '').trim()) return false
+  if (isLocalDocker.value && !(siteForm.paths.workspace || '').trim()) return false
   return true
 }
 
@@ -1338,46 +1631,60 @@ const siteSubStepReached = ref(0)
 const siteSubSteps = computed(() => {
   const local = isLocalDocker.value
   const multi = !local && deployTopology.value === 'multi'
-  return [
+  const steps = [
     {
       key: 'project',
       title: '项目信息',
       desc: local
-        ? '填写项目名称、编码，并勾选本次联调要启用的业务模块（对应 manifest profiles）。'
-        : '填写项目名称与编码。编码会写入 site.yaml 作为本节点标识，建议使用英文或数字。',
+        ? '项目名称、编码与业务模块。'
+        : '项目名称与编码。',
     },
     {
       key: 'machines',
       title: local ? '本机节点' : '机器规划',
       desc: local
-        ? '确认本机 Docker 的访问 IP，一般为 127.0.0.1；点击「自动获取本机 IP」可自动填写。'
+        ? '本机 Docker 访问 IP。'
         : multi
-          ? '先添加参与部署的机器（第一台为当前主控机），再为每项服务选择要跑在哪台机器上；从机需填写 SSH 账号供 ② 步远程初始化。'
-          : '联调 / 极小规模才用单机；真实现场请切回「多台机器（推荐）」。',
+          ? '添加机器并分配服务。第一台为主控。'
+          : '全部服务跑在这一台。',
     },
     {
       key: 'middleware',
       title: '中间件连接',
-      desc: multi
-        ? 'Nacos / MySQL / Redis / PgSQL / Kafka 的 Host 已按上一步服务分配自动同步，账号密码默认公司标准值；一般只需核对，不一致时再修改。'
-        : '核对 Nacos / MySQL / Redis / PgSQL / Kafka 的 Host 与账号密码。默认公司标准值，与标准包一致时无需修改；本版本不依赖 MySQL 可勾选跳过。',
+      desc: '核对 Host 与账号密码。',
     },
     {
       key: 'paths',
       title: '目录与安装包',
       desc: local
-        ? '指定 Release 包目录 / Manifest（体检用）以及 workspace、nginxHtml 路径。'
-        : '指定交付包解压后的 middleware、platform 根目录与 Docker 离线包目录，后续 ②～⑥ 步据此定位各模块；workspace 为挂载盘工作簿根（默认 /workspace），可按 middleware 根目录一键推算。',
+        ? 'Release 包目录与 workspace。'
+        : 'middleware / platform 根目录与 Docker 离线包。',
     },
     {
       key: 'confirm',
       title: '确认保存',
-      desc: '核对以上各项汇总，点「修改」可回到对应小步；确认无误后保存写入 site.yaml 并进入下一步。',
+      desc: '核对后保存。',
     },
   ]
+  return steps
 })
 
-const currentSiteSubStep = computed(() => siteSubSteps.value[siteSubStep.value] || siteSubSteps.value[0])
+watch(
+  siteSubSteps,
+  (steps) => {
+    const last = Math.max(0, steps.length - 1)
+    if (siteSubStep.value > last) siteSubStep.value = last
+    if (siteSubStepReached.value > last) siteSubStepReached.value = last
+  },
+  { immediate: true },
+)
+
+const currentSiteSubStep = computed(() => {
+  const steps = siteSubSteps.value
+  let i = siteSubStep.value
+  if (i >= steps.length) i = Math.max(0, steps.length - 1)
+  return steps[i] || steps[0]
+})
 
 function assignedServiceLabels(nodeIndex) {
   const ids = assignedServicesForNode(nodeIndex)
@@ -1415,12 +1722,24 @@ function validateSiteSubStep(i) {
     return
   }
   if (key === 'paths') {
-    if (!isLocalDocker.value && !fieldPaths.middlewareRoot?.trim()) {
-      throw new Error('第 4 小步：请填写 middleware 根目录')
+    if (isLocalDocker.value && !siteForm.paths.workspace?.trim()) {
+      throw new Error('请填写 workspace 路径')
     }
-    if (!siteForm.paths.workspace?.trim()) {
-      throw new Error('第 4 小步：请填写 workspace 路径（可点「按 middleware 根目录自动填充」）')
-    }
+    if (!isLocalDocker.value) ensureWorkspaceRoot()
+  }
+}
+
+function goSiteSubStepByKey(key) {
+  const i = siteSubSteps.value.findIndex((s) => s.key === key)
+  if (i >= 0) goSiteSubStep(i)
+}
+
+/** ensureWorkspaceRoot 现场把「/」或空路径收成工作簿根 /workspace。 */
+function ensureWorkspaceRoot() {
+  if (isLocalDocker.value) return
+  const ws = (siteForm.paths.workspace || '').trim().replace(/\\/g, '/')
+  if (!ws || ws === '/' || !isWorkbookRoot(ws)) {
+    siteForm.paths.workspace = defaultWorkspacePath()
   }
 }
 
@@ -1441,25 +1760,6 @@ function goSiteSubStep(i) {
 }
 
 function nextSiteSubStep() {
-  const key = siteSubSteps.value[siteSubStep.value]?.key
-  if (
-    key === 'paths' &&
-    !isLocalDocker.value &&
-    fieldPaths.middlewareRoot?.trim() &&
-    (!siteForm.paths.workspace?.trim() || !siteForm.paths.nginxHtml?.trim())
-  ) {
-    // workspace / nginxHtml 未填时按 middleware 根目录自动推算（只补空项），减少手工操作
-    applyPathsFromMiddleware().then(() => {
-      try {
-        validateSiteSubStep(siteSubStep.value)
-      } catch (e) {
-        siteError.value = e.message
-        return
-      }
-      goSiteSubStep(siteSubStep.value + 1)
-    })
-    return
-  }
   try {
     validateSiteSubStep(siteSubStep.value)
   } catch (e) {
@@ -1500,6 +1800,7 @@ async function saveSite() {
   try {
     const useForm = siteEditMode.value === 'form'
     if (useForm) {
+      if (!isLocalDocker.value) ensureWorkspaceRoot()
       validateNodePlan()
       syncServiceAssignments(false)
       await api('/api/site/form', {
@@ -1512,6 +1813,8 @@ async function saveSite() {
         body: JSON.stringify({ yaml: siteYaml.value }),
       })
     }
+    markSiteFileExists()
+    siteFormDirty = false
     siteSaveMsg.value = '已保存并校验通过'
     await loadSite()
   } catch (e) {
@@ -1522,24 +1825,130 @@ async function saveSite() {
 }
 
 async function expandPickerDir() {
-  if (!picker.current) return
+  await runPickerExpand({ dir: picker.current })
+}
+
+/**
+ * expandPickerArchive 只解列表里点中的那一个 zip / tar.zip，不解整个当前目录。
+ * @param {{ path?: string, archiveKind?: string, name?: string }} entry 路径选择器条目
+ */
+async function expandPickerArchive(entry) {
+  const path = String(entry?.path || '').trim()
+  if (!path) return
+  const kind = String(entry.archiveKind || '').toLowerCase()
+  if (kind !== 'zip' && kind !== 'tar.zip') {
+    picker.expandHint = `「${entry.name || path}」不是可解压的 zip（.tar 不用再解）。`
+    return
+  }
+  await runPickerExpand({ file: path })
+}
+
+function canExpandArchive(entry) {
+  if (!entry?.isArchive) return false
+  const kind = String(entry.archiveKind || '').toLowerCase()
+  return (kind === 'zip' || kind === 'tar.zip') && !entry.alreadyExpanded
+}
+
+function clampPercent(v) {
+  const n = Number(v)
+  if (!Number.isFinite(n)) return 0
+  return Math.max(0, Math.min(100, Math.round(n)))
+}
+
+function applyExpandJobToPicker(job) {
+  picker.expandLogs = job.logs || []
+  const r = job.result || {}
+  picker.expandPercent = clampPercent(r.percent)
+  picker.expandPackTotal = Number(r.total) || 0
+  if (Number(r.bytesTotal) > 0) {
+    picker.expandPackPercent = clampPercent((Number(r.bytesDone) * 100) / Number(r.bytesTotal))
+  } else {
+    picker.expandPackPercent = clampPercent(r.packPercent)
+  }
+  if (job.status === 'ok') {
+    picker.expandStatus = job.message || '解压完成'
+    picker.expandDetail = ''
+    picker.expandPercent = 100
+    picker.expandPackPercent = 100
+    return
+  }
+  if (job.status === 'fail') {
+    picker.expandStatus = job.message || '解压失败'
+    picker.expandDetail = ''
+    return
+  }
+  const tot = Number(r.total) || 0
+  const done = Number(r.done) || 0
+  const name = r.current || ''
+  if (name && tot > 1) {
+    picker.expandStatus = `第 ${Math.min(done + 1, tot)}/${tot} 个包 · ${name}`
+  } else if (name) {
+    picker.expandStatus = `正在解压 ${name}`
+  } else {
+    picker.expandStatus = tot > 1 ? `准备解压 ${tot} 个压缩包…` : '正在扫描压缩包…'
+  }
+  const bits = []
+  if (r.entry) bits.push(r.entry)
+  if (Number(r.bytesTotal) > 0) {
+    bits.push(`${formatBytes(r.bytesDone)} / ${formatBytes(r.bytesTotal)}`)
+  } else if (Number(r.fileTotal) > 0) {
+    bits.push(`${r.fileDone}/${r.fileTotal} 个文件`)
+  }
+  picker.expandDetail = bits.join(' · ')
+}
+
+async function runPickerExpand(body) {
+  if (picker.expanding) return
+  if (!body.file && !picker.current) return
   picker.expanding = true
   picker.error = ''
   picker.expandMsg = ''
+  picker.expandHint = ''
+  picker.expandLogs = []
+  picker.expandPercent = 0
+  picker.expandPackPercent = 0
+  picker.expandPackTotal = 0
+  picker.expandDetail = ''
+  picker.expandStatus = body.file
+    ? `准备解压 ${zipBaseName(body.file)}`
+    : `准备解压当前目录：${picker.current}`
   try {
-    const res = await api('/api/fs/expand', {
+    const job = await api('/api/fs/expand', {
       method: 'POST',
-      body: JSON.stringify({ dir: picker.current }),
+      body: JSON.stringify(body),
     })
-    const nZip = res.zipExtracted || 0
-    const nTar = res.tarUnwrapped || 0
-    const nTarFiles = (res.tarFiles || []).length
-    picker.expandMsg = `完成：解压 ${nZip} 个 zip，展开 ${nTar} 个 tar.zip，发现 ${nTarFiles} 个 .tar`
-    await browseFS(picker.current)
+    if (!job?.id) {
+      throw new Error('解压任务未启动')
+    }
+    const done = await pollJob(job.id, applyExpandJobToPicker)
+    applyExpandJobToPicker(done)
+    if (done.status === 'ok') {
+      picker.expandMsg = done.message || '解压完成'
+      picker.expandPercent = 100
+    } else {
+      picker.error = done.message || '解压失败'
+    }
+    if (picker.current) await browseFS(picker.current)
   } catch (e) {
     picker.error = e.message
+    picker.expandStatus = '解压失败'
   } finally {
     picker.expanding = false
+  }
+}
+
+/**
+ * pollJob 轮询 /api/jobs/:id，不占用部署用的 WebSocket。
+ * @param {string} id 任务 id
+ * @param {(job: object) => void} [onUpdate] 每次轮询回调
+ * @returns {Promise<object>}
+ */
+async function pollJob(id, onUpdate) {
+  for (;;) {
+    const job = await api('/api/jobs/' + encodeURIComponent(id))
+    if (onUpdate) onUpdate(job)
+    if (job.status === 'ok' || job.status === 'fail') return job
+    await new Promise((resolve) => setTimeout(resolve, 200))
   }
 }
 
@@ -1549,6 +1958,13 @@ async function openPicker(target, mode) {
   picker.mode = mode
   picker.error = ''
   picker.expandMsg = ''
+  picker.expandHint = ''
+  picker.expandLogs = []
+  picker.expandPercent = 0
+  picker.expandPackPercent = 0
+  picker.expandPackTotal = 0
+  picker.expandStatus = ''
+  picker.expandDetail = ''
   picker.selected =
     target === 'nacosConfigZips'
       ? [...nacosConfigZipList.value]
@@ -1579,13 +1995,16 @@ async function openPicker(target, mode) {
 
 async function browseFS(path) {
   picker.error = ''
+  if (!picker.expanding) picker.expandHint = ''
   try {
     const q = new URLSearchParams({ mode: picker.mode })
     if (path) q.set('path', path)
+    if (picker.target) q.set('target', picker.target)
     const data = await api('/api/fs?' + q.toString())
     picker.current = data.path || ''
     picker.parent = data.parent || ''
     picker.entries = data.entries || []
+    picker.hint = data.hint || { level: '', title: '', headline: '', message: '', enter: [], marks: [] }
   } catch (e) {
     picker.error = e.message
     if (path) {
@@ -1599,10 +2018,7 @@ function confirmPicker(path) {
   if (picker.target === 'package') form.package = path
   if (picker.target === 'base') form.base = path
   if (picker.target === 'dockerPackage') form.dockerPackage = path
-  if (picker.target === 'middlewareRoot') {
-    fieldPaths.middlewareRoot = path
-    applyPathsFromMiddleware()
-  }
+  if (picker.target === 'middlewareRoot') fieldPaths.middlewareRoot = path
   if (picker.target === 'platformRoot') fieldPaths.platformRoot = path
   if (picker.target === 'nginxDir') fieldPaths.nginxDir = path
   if (picker.target === 'pathsWorkspace') siteForm.paths.workspace = path
@@ -1624,19 +2040,64 @@ function onFsClick(e) {
     togglePickerSelect(e.path)
     return
   }
-  if (e.isArchive && picker.mode === 'dir') {
-    expandPickerDir()
+  if (picker.mode === 'yaml') {
+    confirmPicker(e.path)
     return
   }
-  confirmPicker(e.path)
+  if (e.isArchive && picker.mode === 'dir') {
+    picker.expandHint = e.alreadyExpanded
+      ? `「${e.name}」已经展开过，不能当作目录选中。请选文件夹，或点「选择当前目录」。`
+      : `「${e.name}」是压缩包，不能当作目录选中。解压目标是当前目录：${picker.current || '（尚未进入目录）'}。请点右侧「解压此包」，或上方「解压当前目录」。`
+    return
+  }
+  if (picker.mode === 'dir' && !e.isDir) {
+    picker.expandHint = `「${e.name}」是文件，只用来对照当前目录里有什么。请点文件夹进入，或点「选择当前目录」。`
+  }
 }
 
 function onFsDblClick(e) {
-  if (e.isDir && picker.mode === 'dir') confirmPicker(e.path)
+  if (e.isDir && picker.mode === 'dir' && !picker.expanding) confirmPicker(e.path)
+}
+
+function pickerEntryBase(e) {
+  const p = String(e?.path || '')
+    .replace(/[/\\]+$/, '')
+    .split(/[/\\]/)
+  return (p[p.length - 1] || '').toLowerCase()
+}
+
+function hintNames(list) {
+  return (list || []).map((n) => String(n).toLowerCase())
+}
+
+/**
+ * isHintEnter 当前条目是提示里「再点进去」的文件夹。
+ * @param {object} e 路径选择器条目
+ * @returns {boolean}
+ */
+function isHintEnter(e) {
+  return !!(e?.isDir && hintNames(picker.hint?.enter).includes(pickerEntryBase(e)))
+}
+
+/**
+ * isHintMark 当前条目是到层标志（模块文件夹或 manifest.yaml）。
+ * @param {object} e 路径选择器条目
+ * @returns {boolean}
+ */
+function isHintMark(e) {
+  return hintNames(picker.hint?.marks).includes(pickerEntryBase(e))
+}
+
+function pickerHintType(level) {
+  if (level === 'ready') return 'success'
+  if (level === 'deeper') return 'warning'
+  if (level === 'up') return 'error'
+  return 'info'
 }
 
 async function goWizard() {
   await loadSite()
+  if (!isLocalDocker.value) ensureWorkspaceRoot()
   view.value = 'wizard'
 }
 
@@ -1671,7 +2132,8 @@ async function nextFromSite() {
 }
 
 /**
- * 解析套层包内模块目录（如 …/middleware/middleware/nginx）。
+ * 解析套层包内模块目录（如 …/middle/middle/nginx）。
+ * 若后端确认目录存在则用之，否则回落直接拼接。
  * @param {string} root
  * @param {string} name
  * @returns {Promise<string>}
@@ -1682,6 +2144,7 @@ async function resolveNestedModulePath(root, name) {
     const res = await api(
       '/api/module/path?root=' + encodeURIComponent(root) + '&name=' + encodeURIComponent(name),
     )
+    if (res.path && res.exists) return res.path
     if (res.path) return res.path
   } catch (_) {
     /* 回落到直接拼接 */
@@ -1689,15 +2152,68 @@ async function resolveNestedModulePath(root, name) {
   return joinPath(root, name)
 }
 
+/**
+ * 定位 Nginx 模块目录：先从工作簿根 /workspace 找 middle/middle/nginx，
+ * 再从用户填写的 middleware 根找；不要用水厂包路径去拼 nginx。
+ * @returns {Promise<string>}
+ */
+async function resolveNginxModuleDir() {
+  const roots = []
+  const ws = (siteForm.paths.workspace || '').trim()
+  roots.push(isWorkbookRoot(ws) ? ws : defaultWorkspacePath())
+  const mw = (fieldPaths.middlewareRoot || '').trim()
+  if (mw && !roots.includes(mw)) roots.push(mw)
+  let fallback = ''
+  for (const root of roots) {
+    const p = await resolveNestedModulePath(root, 'nginx')
+    if (!p) continue
+    fallback = fallback || p
+    const n = String(p).replace(/\\/g, '/').replace(/\/+$/, '')
+    if (/\/middle\/middle\/nginx$/i.test(n) || /\/middleware\/middleware\/nginx$/i.test(n)) {
+      return p
+    }
+  }
+  return fallback
+}
+
+/**
+ * moduleDir 列表里展示的模块目录：优先后端解析出的真实路径，未解析完时先显示 root/name。
+ * @param {'database'|'middleware'|'business'} phase
+ * @param {string} name
+ * @returns {string}
+ */
 function moduleDir(phase, name) {
   const root =
     phase === 'business' ? fieldPaths.platformRoot : fieldPaths.middlewareRoot
   if (!root) return '（未配置根目录）'
-  const direct = joinPath(root, name)
-  const base = root.split(/[/\\]/).filter(Boolean).pop()
-  const nested = joinPath(joinPath(root, base), name)
-  return direct === nested ? direct : `${direct}（或 ${nested}）`
+  return resolvedModuleDirs[`${phase}/${name}`] || joinPath(root, name)
 }
+
+/** 根目录一变就按阶段重新解析全部模块目录，填进 resolvedModuleDirs。 */
+async function refreshModuleDirs(phase) {
+  const root = phase === 'business' ? fieldPaths.platformRoot : fieldPaths.middlewareRoot
+  const list = phase === 'business' ? fieldModules.business
+    : phase === 'database' ? fieldModules.database
+    : fieldModules.middleware
+  for (const m of list) delete resolvedModuleDirs[`${phase}/${m.name}`]
+  if (!root || isLocalDocker.value) return
+  await Promise.all(
+    list.map(async (m) => {
+      const p = await resolveNestedModulePath(root, m.name)
+      // 期间根目录又被改了就丢弃这次结果
+      const cur = phase === 'business' ? fieldPaths.platformRoot : fieldPaths.middlewareRoot
+      if (cur === root && p) resolvedModuleDirs[`${phase}/${m.name}`] = p
+    }),
+  )
+}
+
+const refreshPlatformDirsSoon = debounce(() => refreshModuleDirs('business'), 400)
+const refreshMiddlewareDirsSoon = debounce(() => {
+  refreshModuleDirs('database')
+  refreshModuleDirs('middleware')
+}, 400)
+watch(() => fieldPaths.platformRoot, refreshPlatformDirsSoon, { immediate: true })
+watch(() => fieldPaths.middlewareRoot, refreshMiddlewareDirsSoon, { immediate: true })
 
 function completeFieldStep(key, nextStep) {
   if (!fieldStepDone[key === 'docker' ? 'site' : prevKey(key)] && key !== 'docker') {
@@ -1724,8 +2240,10 @@ function prevKey(key) {
 }
 
 async function saveSiteFormOnly() {
+  if (!isLocalDocker.value) ensureWorkspaceRoot()
   const payload = buildFormPayload()
   await api('/api/site/form', { method: 'PUT', body: JSON.stringify(payload) })
+  markSiteFileExists()
 }
 
 /**
@@ -1740,7 +2258,12 @@ async function resolveModuleDir(phase, name) {
   return resolveNestedModulePath(root, name)
 }
 
-async function loadTextFile(path, { find = false } = {}) {
+/**
+ * loadTextFile 读文件进编辑弹框。
+ * @param {string} path 请求路径；find=true 时后端可在模块目录内查找同名文件。
+ * @param {{find?: boolean, keepCandidates?: boolean}} [opts] keepCandidates 在候选之间切换时保留候选列表。
+ */
+async function loadTextFile(path, { find = false, keepCandidates = false } = {}) {
   if (!path) return
   fileEditor.path = path
   fileEditor.loading = true
@@ -1751,6 +2274,12 @@ async function loadTextFile(path, { find = false } = {}) {
     const data = await api(url)
     fileEditor.path = data.path || path
     fileEditor.text = data.text || ''
+    // GIS 这类模块下有 giscenter/.env 与 gisdefault/.env 两份，后端把同名候选一起返回，弹框里可切换。
+    if (Array.isArray(data.candidates) && data.candidates.length > 1) {
+      fileEditor.candidates = data.candidates
+    } else if (!keepCandidates) {
+      fileEditor.candidates = []
+    }
     if (data.exists === false) {
       fileEditor.msg = data.hint || '文件尚不存在，保存后会新建'
     } else {
@@ -1794,19 +2323,28 @@ async function openEnvEditor(phase, name) {
   siteSaveMsg.value = `编辑 ${fileEditor.path || envPath}（保存后生效；部署时会按需再改 IP）`
 }
 
-async function openStandaloneEnvEditor(pathKey) {
+async function openStandaloneEnvEditor(pathKey, dirName) {
   const dir = (siteForm.paths[pathKey] || '').trim()
   if (!dir) {
     siteError.value = '请先填写该独立包目录'
     return
   }
-  await loadTextFile(joinPath(dir, '.env'), { find: true })
+  const envPath = dirName ? joinPath(joinPath(dir, dirName), '.env') : joinPath(dir, '.env')
+  await loadTextFile(envPath, { find: true })
+  siteSaveMsg.value = `编辑 ${fileEditor.path || envPath}（保存后生效；部署时会按站点同步改写 center/device 两份 .env）`
 }
 
 function closeFileEditor() {
   fileEditor.path = ''
   fileEditor.text = ''
   fileEditor.msg = ''
+  fileEditor.candidates = []
+}
+
+/** switchFileCandidate 在同名候选文件之间切换（如 giscenter/.env ↔ gisdefault/.env）。 */
+async function switchFileCandidate(path) {
+  if (!path || path === fileEditor.path) return
+  await loadTextFile(path, { keepCandidates: true })
 }
 
 async function openNginxConfEditor() {
@@ -1817,15 +2355,63 @@ async function openNginxConfEditor() {
   await loadTextFile(nginxWebConfPath.value, { find: true })
 }
 
-/** Nginx 部署：使用已保存的 conf，不再自动同步 proxy_pass IP。 */
-async function runNginxDeploy() {
+/**
+ * refreshNginxRuntime 查本机该 nginx 模块是否已 compose up 且在跑。
+ * 已部署时允许跳过本步进入验收；查失败不当成已部署。
+ * @returns {Promise<object|null>}
+ */
+async function refreshNginxRuntime() {
+  const dir = (fieldPaths.nginxDir || '').trim()
+  if (!dir) {
+    nginxRuntime.value = null
+    return null
+  }
+  try {
+    const st = await api('/api/nginx/status?dir=' + encodeURIComponent(dir))
+    nginxRuntime.value = st
+    if (st && st.deployed) {
+      fieldStepDone.nginx = true
+      nginxPatchDone.value = true
+    }
+    return st
+  } catch (e) {
+    nginxRuntime.value = { deployed: false, reason: e.message, summary: '无法检查 Nginx 状态' }
+    return nginxRuntime.value
+  }
+}
+
+const nginxRuntimeLabel = computed(() => {
+  const st = nginxRuntime.value
+  if (!st) return ''
+  if (st.deployed) return st.summary || '已在运行'
+  return st.summary || '尚未部署'
+})
+
+/**
+ * runNginxDeploy 部署本机 Nginx。已在运行且未 force 时跳过 load / compose up。
+ * @param {{ force?: boolean }} [opts] force 为真则强制重部
+ * @returns {Promise<void>}
+ */
+async function runNginxDeploy(opts = {}) {
+  const force = !!opts.force
   activeJobKey.value = 'nginx-patch'
   busy.value = true
   jobLogs.value = []
+  if (!force) {
+    const st = await refreshNginxRuntime()
+    if (st && st.deployed) {
+      jobLogs.value = [(st.summary || 'Nginx 已在运行') + '，已跳过部署']
+      nginxPatchDone.value = true
+      fieldStepDone.nginx = true
+      busy.value = false
+      activeJobKey.value = ''
+      return
+    }
+  }
   nginxPatchDone.value = false
   logRemoteHint('nginx')
   try {
-    // 多机时仍上传模块目录（含已编辑的 conf），但不做 IP 同步
+    // 前端静态只在主控机 Nginx 解压；SSH 不同步 html。conf 已在本机编辑保存。
     const job = await api('/api/nginx/patch', {
       method: 'POST',
       body: JSON.stringify({
@@ -1833,6 +2419,7 @@ async function runNginxDeploy() {
         expandHtml: true,
         composeUp: true,
         skipProxyPatch: true,
+        force,
         ...remoteFields('nginx'),
         syncFiles: true,
       }),
@@ -1840,6 +2427,7 @@ async function runNginxDeploy() {
     const done = await watchJob(job.id)
     nginxPatchDone.value = done.status === 'ok'
     if (done.status === 'ok') fieldStepDone.nginx = true
+    await refreshNginxRuntime()
   } catch (e) {
     jobLogs.value.push('ERROR: ' + e.message)
   } finally {
@@ -1954,6 +2542,44 @@ async function runAllDatabaseDeploy() {
 }
 
 /**
+ * 平台业务步骤：依次一键部署全部启用的平台模块（带 .env IP 改写）。
+ * 顺序 public → device → 其余：网关/公共服务先起，业务服务再注册。
+ */
+async function runAllBusinessDeploy() {
+  const list = deployableBusinessModules.value
+  if (!list.length) {
+    jobLogs.value = ['ERROR: 没有可部署的平台模块（请在第一步勾选服务）']
+    return
+  }
+  activeJobKey.value = 'business-all'
+  busy.value = true
+  jobLogs.value = [`开始一键部署平台业务（共 ${list.length} 个，先按站点改写各模块 .env）…`]
+  let ok = 0
+  try {
+    const order = ['public', 'device', 'alarm', 'graph', 'gis', 'monitor', 'report-center', 'out-work']
+    const sorted = [...list].sort((a, b) => {
+      const ia = order.indexOf(a.name)
+      const ib = order.indexOf(b.name)
+      return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib)
+    })
+    for (const m of sorted) {
+      jobLogs.value.push(`—— ${m.label} ——`)
+      const success = await runModuleDeploy('business', m.name, true, { quiet: true })
+      if (!success) {
+        jobLogs.value.push(`ERROR: ${m.label} 失败，已停止后续模块`)
+        return
+      }
+      ok++
+    }
+    jobLogs.value.push(`平台业务一键部署完成：${ok}/${list.length}`)
+    fieldStepDone.business = true
+  } finally {
+    busy.value = false
+    activeJobKey.value = ''
+  }
+}
+
+/**
  * runApplySQL 把已选的本机 .sql 打到 site.yaml 里的 MySQL / PostgreSQL。
  * 可选步骤，失败不阻断进入中间件。
  */
@@ -1965,7 +2591,7 @@ async function runApplySQL() {
   siteError.value = ''
   const ok = await askConfirm(
     '执行 SQL',
-    `将按顺序对 ${sqlApplyDriver.value === 'mysql' ? 'MySQL' : 'PostgreSQL'} 执行 ${sqlApplyFiles.value.length} 个文件。失败不会回滚已执行语句。确认？`,
+    `将按顺序对 ${sqlApplyDriver.value === 'mysql' ? 'MySQL' : 'PostgreSQL'} 执行 ${sqlApplyFiles.value.length} 个文件。库名空时按脚本/文件名自动切库。失败不会回滚已执行语句。确认？`,
     { danger: true },
   )
   if (!ok) return
@@ -1983,7 +2609,8 @@ async function runApplySQL() {
     })
     const done = await watchJob(job.id)
     if (done.status === 'ok') {
-      notify('SQL 执行完成', 'ok')
+      // 后端 message 已带「库 X（新建）N 张表」，直接给现场看，不再只报一句「完成」。
+      notify(done.message || 'SQL 执行完成', 'ok')
     } else {
       siteError.value = done.message || 'SQL 执行失败'
     }
@@ -2018,7 +2645,7 @@ async function runAllMiddlewareDeploy() {
   let ok = 0
   try {
     // 建议顺序：redis → kafka → nacos → 其余
-    const order = ['redis', 'kafka', 'nacos', 'minio', 'influxdb', 'emqx']
+    const order = ['redis', 'kafka', 'nacos', 'minio', 'influxdb', 'emqx', 'waterjob']
     const sorted = [...list].sort((a, b) => {
       const ia = order.indexOf(a.name)
       const ib = order.indexOf(b.name)
@@ -2049,16 +2676,34 @@ async function runAllMiddlewareDeploy() {
   }
 }
 
-async function runStandaloneDeploy(pathKey, name) {
+/**
+ * runStandaloneDeploy 部署市政水厂（可指定 center/device）或模型：改 .env 后 compose up --build。
+ * @param {string} pathKey siteForm.paths 上的目录键
+ * @param {string} name waterwork | intelligent-model
+ * @param {string} [subService] 水厂的 center / device；空则按模块默认
+ * @param {{ quiet?: boolean }} [opts] quiet 时不清空日志、不独自收 busy（供一键连部）
+ * @returns {Promise<boolean>} 任务成功为 true
+ */
+async function runStandaloneDeploy(pathKey, name, subService, opts = {}) {
   const moduleDir = (siteForm.paths[pathKey] || '').trim()
   if (!moduleDir) {
     jobLogs.value.push('ERROR: 未配置包目录')
-    return
+    return false
   }
-  activeJobKey.value = 'std-' + name
-  busy.value = true
-  jobLogs.value = []
+  const quiet = !!opts.quiet
+  const jobName = subService ? `${name}-${subService}` : name
+  if (!quiet) {
+    activeJobKey.value = 'std-' + jobName
+    busy.value = true
+    jobLogs.value = []
+  } else {
+    activeJobKey.value = 'std-' + jobName
+  }
   logRemoteHint(name)
+  if (subService) {
+    jobLogs.value.push(`→ 只启动 ${subService === 'device' ? 'waterwork-device' : 'waterwork-center'}；center/device 两份 .env 都会按站点配置改写`)
+  }
+  const logPrefix = quiet ? [...jobLogs.value] : null
   try {
     const job = await api('/api/module/deploy', {
       method: 'POST',
@@ -2069,18 +2714,59 @@ async function runStandaloneDeploy(pathKey, name) {
         patchEnv: true,
         composeUp: true,
         composeBuild: true,
+        subService: subService || undefined,
         ...remoteFields(name),
       }),
     })
-    const done = await watchJob(job.id)
+    const done = await watchJob(job.id, logPrefix ? { logPrefix } : {})
     if (done.status === 'ok') {
-      fieldModuleStatus['std-' + name] = 'OK'
-      fieldStepDone.standalone = true
-    } else if (done.message && !(jobLogs.value || []).some((l) => String(l).includes(done.message))) {
+      fieldModuleStatus['std-' + jobName] = 'OK'
+      if (!quiet) fieldStepDone.standalone = true
+      if (quiet) jobLogs.value = [...(logPrefix || []), ...(done.logs || []), `${jobName} 完成`]
+      return true
+    }
+    if (done.message && !(jobLogs.value || []).some((l) => String(l).includes(done.message))) {
       jobLogs.value.push('ERROR: ' + done.message)
     }
+    return false
   } catch (e) {
     jobLogs.value.push('ERROR: ' + e.message)
+    return false
+  } finally {
+    if (!quiet) {
+      busy.value = false
+      activeJobKey.value = ''
+    }
+  }
+}
+
+/**
+ * runAllStandaloneDeploy 依次部署已填目录的市政水厂（center → device）和模型。
+ * 未填的跳过；某一项失败则停止后续，避免半套当完成。
+ * @returns {Promise<void>}
+ */
+async function runAllStandaloneDeploy() {
+  const jobs = deployableStandaloneJobs.value
+  if (!jobs.length) {
+    jobLogs.value = ['ERROR: 请先填写市政水厂或模型服务包目录']
+    return
+  }
+  activeJobKey.value = 'standalone-all'
+  busy.value = true
+  jobLogs.value = [`开始一键部署市政/模型（共 ${jobs.length} 项：${jobs.map((j) => j.label).join('、')}）…`]
+  let ok = 0
+  try {
+    for (const j of jobs) {
+      jobLogs.value.push(`—— ${j.label} ——`)
+      const success = await runStandaloneDeploy(j.pathKey, j.name, j.subService, { quiet: true })
+      if (!success) {
+        jobLogs.value.push(`ERROR: ${j.label} 失败，已停止后续独立包`)
+        return
+      }
+      ok++
+    }
+    jobLogs.value.push(`市政/模型一键部署完成：${ok}/${jobs.length}`)
+    fieldStepDone.standalone = true
   } finally {
     busy.value = false
     activeJobKey.value = ''
@@ -2093,28 +2779,40 @@ async function expandPlatformArchives(showLogs = true) {
     return false
   }
   if (showLogs) {
+    activeJobKey.value = 'expand-platform'
     busy.value = true
     jobLogs.value = []
   }
   try {
-    const res = await api('/api/fs/expand', {
+    const job = await api('/api/fs/expand', {
       method: 'POST',
       body: JSON.stringify({ dir: fieldPaths.platformRoot }),
     })
+    if (!job?.id) {
+      throw new Error('解压任务未启动')
+    }
+    const done = showLogs
+      ? await watchJob(job.id)
+      : await pollJob(job.id)
+    if (done.status !== 'ok') {
+      throw new Error(done.message || '解压失败')
+    }
+    const res = done.result || {}
     const nZip = res.zipExtracted ?? 0
     const nTar = res.tarUnwrapped ?? 0
     const nFiles = (res.tarFiles || []).length
-    const msg = `platform 解压完成：zip=${nZip} tar.zip=${nTar} 可用 .tar=${nFiles}`
+    const msg = done.message || `platform 解压完成：zip=${nZip} tar.zip=${nTar} 可用 .tar=${nFiles}`
     if (showLogs) jobLogs.value.push(msg)
-    siteSaveMsg.value = msg
     return true
   } catch (e) {
     const partial = e.message || String(e)
-    if (showLogs) jobLogs.value.push('WARN: ' + partial)
-    siteSaveMsg.value = partial
+    if (showLogs) jobLogs.value.push('ERROR: ' + partial)
     return false
   } finally {
-    if (showLogs) busy.value = false
+    if (showLogs) {
+      busy.value = false
+      activeJobKey.value = ''
+    }
   }
 }
 
@@ -2134,26 +2832,38 @@ async function patchAllBusinessEnv() {
 }
 
 /**
- * 从 middleware / middle 目录推出工作簿根（其父目录）。
- * 兼容双层 …/middleware/middleware；对不上则回落默认 /workspace。
- * @param {string} root
- * @returns {string}
+ * patchAllStandaloneEnv 按站点配置批量改写市政水厂 / 模型包下全部 .env（含 center 与 device）。
+ * @returns {Promise<void>}
  */
-function inferWorkspaceFromMiddleware(root) {
-  return inferWorkspaceRoot(root, defaultWorkspacePath())
-}
-
-async function applyPathsFromMiddleware() {
-  const root = fieldPaths.middlewareRoot
-  if (!root) {
-    siteError.value = '请先填写 middleware 根目录'
+async function patchAllStandaloneEnv() {
+  const roots = [siteForm.paths.waterwork, siteForm.paths.intelligentModel]
+    .map((p) => String(p || '').trim())
+    .filter(Boolean)
+  if (!roots.length) {
+    siteError.value = '请先填写市政水厂或模型服务包目录'
     return
   }
-  siteForm.paths.workspace = siteForm.paths.workspace || inferWorkspaceFromMiddleware(root)
-  const nginxDir = await resolveNestedModulePath(root, 'nginx')
-  fieldPaths.nginxDir = fieldPaths.nginxDir || nginxDir
-  siteForm.paths.nginxHtml = siteForm.paths.nginxHtml || joinPath(fieldPaths.nginxDir, 'html')
-  siteSaveMsg.value = '已按 middleware 目录填充：workspace 为工作簿根，nginxHtml = nginx/html'
+  busy.value = true
+  siteError.value = ''
+  jobLogs.value = []
+  let total = 0
+  try {
+    for (const root of roots) {
+      const res = await api('/api/module/patch-env', {
+        method: 'POST',
+        body: JSON.stringify({ root }),
+      })
+      const n = res.count || 0
+      total += n
+      jobLogs.value.push(`已更新 ${root}：${n} 处（Nacos / Redis / Kafka / PgSQL→MYSQL_*）`)
+    }
+    jobLogs.value.push(`合计 ${total} 处 .env`)
+  } catch (e) {
+    jobLogs.value.push('ERROR: ' + e.message)
+    siteError.value = e.message
+  } finally {
+    busy.value = false
+  }
 }
 
 async function runNacosImport() {
@@ -2231,7 +2941,7 @@ function watchJob(id, opts = {}) {
   return new Promise((resolve) => {
     if (jobWs) jobWs.close()
     const proto = location.protocol === 'https:' ? 'wss' : 'ws'
-    jobWs = new WebSocket(`${proto}://${location.host}/api/ws/job?id=${id}`)
+    jobWs = new WebSocket(`${proto}://${location.host}${apiPath('/api/ws/job')}?id=${id}`)
     jobWs.onmessage = (ev) => {
       const job = JSON.parse(ev.data)
       const lines = job.logs || []
@@ -2255,6 +2965,7 @@ function watchJob(id, opts = {}) {
 }
 
 async function runPrecheck() {
+  activeJobKey.value = 'precheck'
   busy.value = true
   jobLogs.value = []
   precheckDone.value = false
@@ -2272,8 +2983,83 @@ async function runPrecheck() {
     jobLogs.value.push('ERROR: ' + e.message)
   } finally {
     busy.value = false
+    activeJobKey.value = ''
   }
 }
+
+/**
+ * nodeDockerOf 取某台机器的 Docker 探测结果，没有探测过则返回空对象。
+ * @param {{ ip?: string }} n 节点
+ * @returns {{ ok?: boolean, message?: string, version?: string, local?: boolean }}
+ */
+function nodeDockerOf(n) {
+  const ip = String(n?.ip || '').trim()
+  if (!ip) return { message: '未填 IP' }
+  return nodeDockerByIP[ip] || {}
+}
+
+/**
+ * nodeDockerLabel 机器卡片上显示的短状态。
+ * @param {{ ip?: string }} n 节点
+ * @returns {string}
+ */
+function nodeDockerLabel(n) {
+  const st = nodeDockerOf(n)
+  if (!String(n?.ip || '').trim()) return ''
+  if (nodeDockerBusy.value && !st.message && st.ok == null) return 'Docker 检查中'
+  if (st.ok) return st.version ? `Docker 已启动 ${st.version}` : 'Docker 已启动'
+  if (st.message) {
+    if (String(st.message).includes('SSH')) return 'Docker 未检查'
+    return 'Docker 未启动'
+  }
+  return nodeDockerBusy.value ? 'Docker 检查中' : ''
+}
+
+/**
+ * refreshNodeDocker 并行探测各机器 Docker 是否启动。
+ * @returns {Promise<void>}
+ */
+async function refreshNodeDocker() {
+  const nodes = (siteForm.nodes || []).filter((n) => String(n.ip || '').trim())
+  if (!nodes.length) return
+  nodeDockerBusy.value = true
+  try {
+    const data = await api('/api/docker/nodes', {
+      method: 'POST',
+      body: JSON.stringify({
+        nodes: siteForm.nodes.map((n) => ({
+          name: n.name,
+          ip: n.ip,
+          sshUser: n.sshUser,
+          sshPort: Number(n.sshPort) || 22,
+        })),
+        sshPassword: sshCreds.password || undefined,
+        sshKeyPath: sshCreds.keyPath || undefined,
+      }),
+    })
+    const next = {}
+    for (const st of data.nodes || []) {
+      if (st.ip) next[st.ip] = st
+    }
+    Object.keys(nodeDockerByIP).forEach((k) => {
+      delete nodeDockerByIP[k]
+    })
+    Object.assign(nodeDockerByIP, next)
+  } catch {
+    /* 探测失败时保留上次结果 */
+  } finally {
+    nodeDockerBusy.value = false
+  }
+}
+
+const refreshNodeDockerSoon = debounce(() => {
+  if (!siteHydrated) return
+  const onWizard = view.value === 'wizard'
+  const onMachines =
+    onWizard && wizardStep.value === 0 && siteSubSteps.value[siteSubStep.value]?.key === 'machines'
+  const onDocker = onWizard && !isLocalDocker.value && wizardStep.value === 1
+  if (onMachines || onDocker) refreshNodeDocker()
+}, 800)
 
 async function runInit() {
   activeJobKey.value = 'init'
@@ -2300,10 +3086,98 @@ async function runInit() {
   } finally {
     busy.value = false
     activeJobKey.value = ''
+    await loadFirewallStatus()
+    await refreshNodeDocker()
   }
 }
 
+/**
+ * selectFirewallNode 切换要检查防火墙的机器（① 步规划的节点）。
+ * @param {number} i 节点下标
+ */
+function selectFirewallNode(i) {
+  firewallNodeIndex.value = i
+  loadFirewallStatus()
+}
+
+/**
+ * loadFirewallStatus 拉取当前选中机器的防火墙快照（含已放行端口）。
+ * @returns {Promise<void>}
+ */
+async function loadFirewallStatus() {
+  firewallChecking.value = true
+  firewallStatusError.value = ''
+  try {
+    const nodes = siteForm.nodes || []
+    if (firewallNodeIndex.value >= nodes.length) firewallNodeIndex.value = 0
+    const n = nodes[firewallNodeIndex.value]
+    firewallStatus.value = await api('/api/firewall/status', {
+      method: 'POST',
+      body: JSON.stringify({
+        node: (n?.name || n?.ip || '').trim(),
+        sshPassword: sshCreds.password || undefined,
+        sshKeyPath: sshCreds.keyPath || undefined,
+      }),
+    })
+  } catch (e) {
+    firewallStatus.value = null
+    firewallStatusError.value = e.message
+  } finally {
+    firewallChecking.value = false
+  }
+}
+
+const firewallBadge = computed(() => {
+  const st = firewallStatus.value
+  if (!st) return { text: '未检查', cls: 'yellow' }
+  if (st.running) return { text: '已运行', cls: 'green' }
+  if (st.tool === 'none') return { text: '未检测到', cls: 'red' }
+  return { text: '未运行', cls: 'yellow' }
+})
+
+const firewallToolLabel = computed(() => {
+  const st = firewallStatus.value
+  if (!st) return ''
+  const tool = st.tool && st.tool !== 'none' ? st.tool : '无防火墙工具'
+  const detail = st.detail ? `（${st.detail}）` : ''
+  return `${tool}${detail}`
+})
+
+/**
+ * runFirewallJob 执行启动 / reload，日志写入向导控制台。
+ * @param {'firewall-start'|'firewall-reload'} key 任务键
+ * @param {string} path API 路径
+ * @returns {Promise<void>}
+ */
+async function runFirewallJob(key, path) {
+  activeJobKey.value = key
+  busy.value = true
+  jobLogs.value = []
+  try {
+    const job = await api(path, { method: 'POST' })
+    const done = await watchJob(job.id)
+    if (done.status !== 'ok') jobLogs.value.push('ERROR: ' + done.message)
+  } catch (e) {
+    jobLogs.value.push('ERROR: ' + e.message)
+  } finally {
+    busy.value = false
+    activeJobKey.value = ''
+    await loadFirewallStatus()
+  }
+}
+
+/** startFirewall 启动 firewalld / ufw，启动前会放行 SSH 22 和控制台 9527。 */
+function startFirewall() {
+  return runFirewallJob('firewall-start', '/api/firewall/start')
+}
+
+/** reloadFirewall 对已运行的 firewalld 执行 --reload。 */
+function reloadFirewall() {
+  return runFirewallJob('firewall-reload', '/api/firewall/reload')
+}
+
 async function runDeploy(dryRun) {
+  activeJobKey.value = 'deploy'
   busy.value = true
   jobLogs.value = []
   smokeRows.value = []
@@ -2326,6 +3200,7 @@ async function runDeploy(dryRun) {
     jobLogs.value.push('ERROR: ' + e.message)
   } finally {
     busy.value = false
+    activeJobKey.value = ''
   }
 }
 
@@ -2412,15 +3287,6 @@ async function runStatusAction(action, s) {
     const ok = await askConfirm('Down 容器', `将强制删除容器 ${name}（docker rm -f）。确认？`, { danger: true })
     if (!ok) return
   }
-  if (action === 'stack-down') {
-    const dir = svcComposeDir(s)
-    const ok = await askConfirm(
-      'Down 整个栈',
-      `将在 ${dir || 'compose 目录'} 执行 docker compose down，停止并删除该项目全部容器。确认？`,
-      { danger: true },
-    )
-    if (!ok) return
-  }
   statusBusy.value = true
   statusActionMsg.value = ''
   try {
@@ -2437,7 +3303,7 @@ async function runStatusAction(action, s) {
     })
     applyStatusPayload(data)
     statusActionOk.value = true
-    const labels = { start: '已启动', stop: '已停止', restart: '已重启', down: '已 Down', 'stack-down': '栈已 Down' }
+    const labels = { start: '已启动', stop: '已停止', restart: '已重启', down: '已 Down' }
     statusActionMsg.value = (labels[action] || '完成') + '：' + name
   } catch (e) {
     statusActionOk.value = false
@@ -2448,20 +3314,22 @@ async function runStatusAction(action, s) {
 }
 
 /**
- * openLogsFor 打开本机容器日志流。从机容器目前不能跟日志，只提示到该机查看。
+ * openLogsFor 打开容器实时日志（docker logs -f）。本机直连；从机经 SSH 跟同一条命令。
  * @param {object|string} s 状态卡片或容器名
  * @returns {void}
  */
 function openLogsFor(s) {
   const name = typeof s === 'string' ? s : svcName(s)
   if (!name) return
-  if (s && typeof s === 'object' && !svcIsLocal(s)) {
-    statusActionOk.value = false
-    statusActionMsg.value = `「${name}」在 ${svcNode(s) || svcNodeIP(s)} 上，日志请到该机查看（状态页日志流目前只接本机 Docker）`
+  const remote = s && typeof s === 'object' && !svcIsLocal(s)
+  logService.value = name
+  logNodeIP.value = remote ? svcNodeIP(s) : 'local'
+  view.value = 'logs'
+  if (remote && !sshCredsReady.value) {
+    sshPanelOpen.value = true
+    notify('查看从机日志请先填写 SSH 凭据，再点「开始监听」', 'warn')
     return
   }
-  logService.value = name
-  view.value = 'logs'
   startLogs()
 }
 
@@ -2483,13 +3351,13 @@ function openReport(id) {
 }
 
 function exportDeliveries() {
-  window.location = '/api/deliveries/export'
+  window.location = apiPath('/api/deliveries/export')
 }
 
 async function downloadDiag() {
   busy.value = true
   try {
-    const res = await fetch('/api/diag')
+    const res = await fetch(apiPath('/api/diag'))
     if (!res.ok) {
       const data = await res.json().catch(() => ({}))
       throw new Error(data.error || res.statusText)
@@ -2519,6 +3387,7 @@ async function openUpgrade() {
 }
 
 async function runFetch() {
+  activeJobKey.value = 'fetch'
   busy.value = true
   jobLogs.value = []
   fetchResultDir.value = ''
@@ -2542,6 +3411,7 @@ async function runFetch() {
     jobLogs.value.push('ERROR: ' + e.message)
   } finally {
     busy.value = false
+    activeJobKey.value = ''
   }
 }
 
@@ -2641,6 +3511,7 @@ function usePackagePath(path) {
 async function runUpgrade() {
   const ok = await askConfirm('确认升级', `确认由 ${settings.operator || 'operator'} 执行？`)
   if (!ok) return
+  activeJobKey.value = 'upgrade'
   busy.value = true
   jobLogs.value = []
   try {
@@ -2655,12 +3526,14 @@ async function runUpgrade() {
     jobLogs.value.push('ERROR: ' + e.message)
   } finally {
     busy.value = false
+    activeJobKey.value = ''
   }
 }
 
 async function runRollback() {
   const ok = await askConfirm('确认回滚', `确认由 ${settings.operator || 'operator'} 执行？`)
   if (!ok) return
+  activeJobKey.value = 'rollback'
   busy.value = true
   jobLogs.value = []
   try {
@@ -2675,6 +3548,7 @@ async function runRollback() {
     jobLogs.value.push('ERROR: ' + e.message)
   } finally {
     busy.value = false
+    activeJobKey.value = ''
   }
 }
 
@@ -2686,14 +3560,58 @@ async function loadHistory() {
   }
 }
 
+function appendLiveLog(chunk) {
+  const text = String(chunk ?? '')
+  if (!liveLogs.value) {
+    liveLogs.value = text
+  } else {
+    liveLogs.value += `\n${text}`
+  }
+  const max = 400000
+  if (liveLogs.value.length > max) {
+    liveLogs.value = liveLogs.value.slice(-Math.floor(max * 0.6))
+  }
+}
+
 function startLogs() {
   stopLogs()
+  if (!logService.value) return
+  if (isRemoteLogNode.value && !sshCredsReady.value) {
+    sshPanelOpen.value = true
+    notify('查看从机日志需要填写 SSH 密码或私钥', 'warn')
+    return
+  }
+  liveLogs.value = ''
   const proto = location.protocol === 'https:' ? 'wss' : 'ws'
-  logWs = new WebSocket(`${proto}://${location.host}/api/ws/logs?service=${encodeURIComponent(logService.value)}`)
+  const params = new URLSearchParams({ service: logService.value })
+  const node = isRemoteLogNode.value ? String(logNodeIP.value).trim() : ''
+  if (node) params.set('node', node)
+  logWs = new WebSocket(`${proto}://${location.host}${apiPath('/api/ws/logs')}?${params}`)
+  logWs.onopen = () => {
+    if (node) {
+      logWs.send(JSON.stringify({
+        sshPassword: sshCreds.password || '',
+        sshKeyPath: sshCreds.keyPath || '',
+      }))
+    }
+  }
   logWs.onmessage = (ev) => {
-    const data = JSON.parse(ev.data)
-    if (data.error) liveLogs.value = data.error
-    else liveLogs.value = data.logs || ''
+    let data
+    try {
+      data = JSON.parse(ev.data)
+    } catch {
+      return
+    }
+    if (data.error) {
+      liveLogs.value = data.error
+      return
+    }
+    const chunk = stripAnsi(data.logs || '')
+    if (data.append) appendLiveLog(chunk)
+    else liveLogs.value = chunk
+  }
+  logWs.onerror = () => {
+    if (!liveLogs.value) liveLogs.value = '日志连接失败'
   }
 }
 
@@ -2703,12 +3621,6 @@ function stopLogs() {
     logWs = null
   }
 }
-
-watch(wizardStep, (step, prev) => {
-  if (step === 4 && prev !== 4 && !isLocalDocker.value && fieldPaths.platformRoot) {
-    expandPlatformArchives(true)
-  }
-})
 
 function notify(text, kind = 'info') {
   const type = kind === 'warn' ? 'warning' : kind === 'ok' ? 'success' : 'info'
@@ -2721,6 +3633,7 @@ function collectUISession() {
     ...wizardProgressSnapshot(),
     deployTopology: deployTopology.value,
     logService: logService.value,
+    logNodeIP: logNodeIP.value,
     siteEditMode: siteEditMode.value,
     sshKeyPath: sshCreds.keyPath,
     sshPanelOpen: sshPanelOpen.value,
@@ -2759,6 +3672,7 @@ function applyUISession(sess, { includeView = true, includeProgress = true } = {
     deployTopology.value = sess.deployTopology
   }
   if (sess.logService) logService.value = sess.logService
+  if (typeof sess.logNodeIP === 'string') logNodeIP.value = sess.logNodeIP.trim() || 'local'
   if (sess.siteEditMode === 'form' || sess.siteEditMode === 'yaml') siteEditMode.value = sess.siteEditMode
   if (sess.sshKeyPath) sshCreds.keyPath = sess.sshKeyPath
   if (typeof sess.sshPanelOpen === 'boolean') sshPanelOpen.value = sess.sshPanelOpen
@@ -2786,6 +3700,7 @@ function collectDraftPayload() {
     sqlApplyDatabase: sqlApplyDatabase.value,
     ...wizardProgressSnapshot(),
     logService: logService.value,
+    logNodeIP: logNodeIP.value,
     siteEditMode: siteEditMode.value,
     sshPanelOpen: sshPanelOpen.value,
     reportId: reportId.value,
@@ -2793,10 +3708,11 @@ function collectDraftPayload() {
   }
 }
 
-function applyDraft(d, { includeProgress = true } = {}) {
+function applyDraft(d, { includeProgress = true, includeSiteForm = true } = {}) {
   if (!d || typeof d !== 'object') return
   applyUISession(d, { includeView: false, includeProgress })
-  if (d.siteForm) {
+  // site.yaml 不存在时不能把上次的项目名/编码写回表单。
+  if (includeSiteForm && d.siteForm) {
     if (d.siteForm.site) Object.assign(siteForm.site, d.siteForm.site)
     if (d.siteForm.paths) Object.assign(siteForm.paths, d.siteForm.paths)
     if (d.siteForm.middleware) {
@@ -2817,8 +3733,8 @@ function applyDraft(d, { includeProgress = true } = {}) {
     sqlApplyDriver.value = d.sqlApplyDriver
   }
   if (typeof d.sqlApplyDatabase === 'string') sqlApplyDatabase.value = d.sqlApplyDatabase
-  if (d.siteYaml && siteEditMode.value === 'yaml') siteYaml.value = d.siteYaml
-  pinNginxToMiddleware()
+  if (includeSiteForm && d.siteYaml && siteEditMode.value === 'yaml') siteYaml.value = d.siteYaml
+  pinNginxToPrimary()
 }
 
 function persistSecrets() {
@@ -2895,11 +3811,17 @@ function applyHashToState() {
 }
 
 async function hydrateRouteData(name) {
+  if (name === 'logs' && logService.value) startLogs()
+  else stopLogs()
+  if (name === 'preflight') {
+    siteForm.paths.workspace = defaultParentPath()
+    workspaceMsg.value = ''
+    workspaceProbe.value = null
+  }
   if (name === 'status') await loadStatus()
   else if (name === 'history') await loadHistory()
   else if (name === 'fetch') await loadPackages()
   else if (name === 'upgrade') await loadLatest()
-  else if (name === 'logs' && logService.value) startLogs()
 }
 
 function onRouteChange() {
@@ -2919,7 +3841,7 @@ function onNavSelect(index) {
 }
 
 function onGlobalKeydown(e) {
-  if (e.key === 'Escape' && picker.open) picker.open = false
+  if (e.key === 'Escape' && picker.open && !picker.expanding) picker.open = false
 }
 
 const persistDraftSoon = debounce(() => {
@@ -2934,33 +3856,46 @@ const persistSessionSoon = debounce(() => {
 }, 700)
 
 const persistSiteFormSoon = debounce(async () => {
-  if (!siteHydrated || !siteFormDirty || siteEditMode.value !== 'form') return
+  if (!siteHydrated || !siteFormDirty) return
+  if (siteEditMode.value === 'yaml') {
+    const yaml = String(siteYaml.value || '').trim()
+    if (!yaml) {
+      persistDraftSoon()
+      return
+    }
+    try {
+      await api('/api/site', {
+        method: 'PUT',
+        body: JSON.stringify({ yaml: siteYaml.value }),
+      })
+      markSiteFileExists()
+      siteFormDirty = false
+      siteSaveMsg.value = '已自动保存到 site.yaml'
+      siteError.value = ''
+    } catch {
+      persistDraftSoon()
+    }
+    return
+  }
   if (!siteFormReadyToPersist()) {
     persistDraftSoon()
     return
   }
   try {
-    const data = await api('/api/site')
-    if (!data.exists) {
-      // 首次填写本来就没有 site.yaml：只跳过自动保存，不能 reset 小步（切一台/多台会改 nodes）。
-      if (siteFileExists.value) {
-        siteFileExists.value = false
-        resetWizardProgress({ announce: true })
-      }
-      persistDraftSoon()
-      persistSessionSoon()
-      return
-    }
     await saveSiteFormOnly()
     siteFormDirty = false
-    siteFileExists.value = true
-    if (view.value === 'wizard' && wizardStep.value === 0) {
-      siteSaveMsg.value = '已自动保存'
-    }
+    siteSaveMsg.value = '已自动保存到 site.yaml'
+    siteError.value = ''
   } catch {
-    /* 表单未填完整时只留本地草稿 */
+    persistDraftSoon()
   }
-}, 900)
+}, 800)
+
+function flushSitePersist() {
+  persistDraftSoon.flush()
+  persistSessionSoon.flush()
+  persistSiteFormSoon.flush()
+}
 
 watch(
   () => [
@@ -2968,6 +3903,7 @@ watch(
     wizardStep.value,
     siteSubStep.value,
     logService.value,
+    logNodeIP.value,
     reportId.value,
   ],
   () => {
@@ -3007,6 +3943,35 @@ watch(
     persistSiteFormSoon()
   },
   { deep: true },
+)
+
+watch(siteYaml, () => {
+  if (!siteHydrated || siteEditMode.value !== 'yaml') return
+  siteFormDirty = true
+  persistDraftSoon()
+  persistSiteFormSoon()
+})
+
+watch(
+  () => [
+    view.value,
+    wizardStep.value,
+    siteSubStep.value,
+    sshCreds.password,
+    sshCreds.keyPath,
+    ...siteForm.nodes.map((n) => n.ip),
+  ],
+  () => {
+    if (!siteHydrated) return
+    refreshNodeDockerSoon()
+  },
+)
+
+watch(
+  () => [fieldPaths.nginxDir, wizardStep.value, wizardStepDefs.value[wizardStep.value]?.key],
+  ([, , key]) => {
+    if (key === 'nginx') refreshNginxRuntime()
+  },
 )
 
 watch(sshCreds, persistDraftSoon, { deep: true })
@@ -3056,8 +4021,16 @@ async function mount() {
   await loadSite()
   const draft = loadDraft()
   if (draft) {
-    applyDraft(draft, { includeProgress: siteFileExists.value })
-    siteFormDirty = true
+    applyDraft(draft, {
+      includeProgress: siteFileExists.value,
+      // 磁盘已有 site.yaml 以文件为准；还没落盘时用草稿接上，避免刷新丢掉未保存项。
+      includeSiteForm: !siteFileExists.value,
+    })
+    if (!siteFileExists.value) siteFormDirty = true
+  }
+  await pruneMissingLocalPaths()
+  if (!siteFileExists.value && !isWorkbookRoot(siteForm.paths.workspace)) {
+    siteForm.paths.workspace = ''
   }
   restoreSecrets()
   siteHydrated = true
@@ -3078,15 +4051,16 @@ async function mount() {
   persistSessionSoon()
   window.addEventListener('keydown', onGlobalKeydown)
   document.addEventListener('visibilitychange', onSiteVisibility)
+  window.addEventListener('pagehide', onPageHide)
 }
 function unmount() {
   stopLogs()
+  clearInterval(jobClockTimer)
   if (jobWs) jobWs.close()
-  persistDraftSoon.flush()
-  persistSessionSoon.flush()
-  persistSiteFormSoon.flush()
+  flushSitePersist()
   window.removeEventListener('keydown', onGlobalKeydown)
   document.removeEventListener('visibilitychange', onSiteVisibility)
+  window.removeEventListener('pagehide', onPageHide)
 }
 
 return {
@@ -3115,7 +4089,9 @@ return {
   workspaceProbe,
   workspaceMsg,
   workspaceBusy,
+  defaultParentPath,
   defaultWorkspacePath,
+  resolvedWorkbookPath,
   goDeployEntry,
   initWorkspaceAndEnter,
   remoteTargetFor,
@@ -3134,12 +4110,18 @@ return {
   fieldPaths,
   fieldModuleStatus,
   nginxPatchDone,
+  nginxRuntime,
+  nginxRuntimeLabel,
+  refreshNginxRuntime,
   nacosImportDone,
   fieldModules,
+  WATERWORK_SUBSERVICES,
   standaloneModules,
   fieldDatabaseModules,
   deployableDatabaseModules,
   deployableMiddlewareModules,
+  deployableBusinessModules,
+  deployableStandaloneJobs,
   busy,
   activeJobKey,
   fileEditor,
@@ -3169,6 +4151,9 @@ return {
   clearStatusQuery,
   deployments,
   logService,
+  logNodeIP,
+  logNodeOptions,
+  isRemoteLogNode,
   liveLogs,
   logWs,
   jobWs,
@@ -3192,6 +4177,11 @@ return {
   reportId,
   settings,
   busyText,
+  panelBusy,
+  activeJobLabel,
+  jobElapsedText,
+  activeJobView,
+  goActiveJob,
   picker,
   nacosConfigZipList,
   nacosConfigZipSummary,
@@ -3213,6 +4203,11 @@ return {
   runtimeArch,
   dockerOk,
   dockerMsg,
+  nodeDockerByIP,
+  nodeDockerBusy,
+  nodeDockerOf,
+  nodeDockerLabel,
+  refreshNodeDocker,
   deployHint,
   siteName,
   siteCode,
@@ -3265,9 +4260,8 @@ return {
   isServiceEnabled,
   hydrateServiceAssignments,
   serviceNode,
-  middlewareAnchorIndex,
-  middlewareAnchorLabel,
-  pinNginxToMiddleware,
+  primaryNodeLabel,
+  pinNginxToPrimary,
   syncServiceAssignments,
   assignAllToPrimary,
   setDeployTopology,
@@ -3284,6 +4278,7 @@ return {
   assignedServiceLabels,
   validateSiteSubStep,
   goSiteSubStep,
+  goSiteSubStepByKey,
   nextSiteSubStep,
   prevSiteSubStep,
   syncSingleNodeHosts,
@@ -3291,11 +4286,16 @@ return {
   saveSite,
   fsEntryIcon,
   expandPickerDir,
+  expandPickerArchive,
+  canExpandArchive,
   openPicker,
   browseFS,
   confirmPicker,
   onFsClick,
   onFsDblClick,
+  isHintEnter,
+  isHintMark,
+  pickerHintType,
   goWizard,
   nextFromSite,
   joinPath,
@@ -3310,6 +4310,7 @@ return {
   openStandaloneEnvEditor,
   isEditableConfigFile,
   closeFileEditor,
+  switchFileCandidate,
   openNginxConfEditor,
   runNginxDeploy,
   runModuleDeploy,
@@ -3317,16 +4318,28 @@ return {
   runAllDatabaseDeploy,
   runApplySQL,
   runAllMiddlewareDeploy,
+  runAllBusinessDeploy,
   runStandaloneDeploy,
+  runAllStandaloneDeploy,
   expandPlatformArchives,
   patchAllBusinessEnv,
-  applyPathsFromMiddleware,
+  patchAllStandaloneEnv,
   runNacosImport,
   runVerify,
   goStatus,
   watchJob,
   runPrecheck,
   runInit,
+  loadFirewallStatus,
+  selectFirewallNode,
+  firewallNodeIndex,
+  startFirewall,
+  reloadFirewall,
+  firewallStatus,
+  firewallStatusError,
+  firewallChecking,
+  firewallBadge,
+  firewallToolLabel,
   runDeploy,
   loadPreview,
   openStatus,
@@ -3344,6 +4357,7 @@ return {
   svcHealth,
   svcCreated,
   svcNetworks,
+  svcIsHostNetwork,
   svcExitCode,
   svcComposeDir,
   svcRunning,

@@ -9,7 +9,8 @@ import (
 	"github.com/wpg/wpgctl/internal/initenv"
 )
 
-// handleWorkspace 开始前：探测 / 创建工作簿目录（不含 Docker 安装）。
+// handleWorkspace 开始前：把所选父目录解析成工作簿根后探测 / 创建（不含 Docker 安装）。
+// POST `/` 会创建 `/workspace`（已有则跳过）；不要把交付包名当成工作簿根。
 func (s *Server) handleWorkspace(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
@@ -43,12 +44,12 @@ func (s *Server) handleWorkspace(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		ws := strings.TrimSpace(body.Workspace)
-		html := strings.TrimSpace(body.NginxHTML)
 		if ws == "" {
 			s.writeJSON(w, 400, map[string]string{"error": "workspace 路径不能为空"})
 			return
 		}
-		probe, created, err := initenv.InitWorkspaceDirs(ws, html)
+		ws = initenv.ResolveWorkbookPath(ws)
+		probe, created, err := initenv.InitWorkspaceDirs(ws, "")
 		if err != nil {
 			s.writeJSON(w, 500, map[string]string{"error": err.Error()})
 			return

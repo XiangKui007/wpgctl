@@ -23,25 +23,35 @@ type FSEntry struct {
 	HasDockerInstall bool   `json:"hasDockerInstall,omitempty"` // 含 offline_install_docker.sh
 	IsArchive        bool   `json:"isArchive,omitempty"`        // .zip / .tar / .tar.gz
 	ArchiveKind      string `json:"archiveKind,omitempty"`      // zip | tar | tar.gz
+	AlreadyExpanded  bool   `json:"alreadyExpanded,omitempty"`  // zip/tar.zip 的目标已存在
 }
 
 // FSListResult 目录列表结果。
 type FSListResult struct {
-	Path    string    `json:"path"`
-	Parent  string    `json:"parent"`
-	Entries []FSEntry `json:"entries"`
-	Roots   []string  `json:"roots,omitempty"` // Windows 盘符等
+	Path    string     `json:"path"`
+	Parent  string     `json:"parent"`
+	Entries []FSEntry  `json:"entries"`
+	Roots   []string   `json:"roots,omitempty"` // Windows 盘符等
+	Hint    FSPickHint `json:"hint,omitempty"`  // 当前层能不能选
 }
 
 // listFS 列出目录内容，供网页路径选择器使用。
 //
-// mode: "dir" 只返回目录；"file" 返回目录+文件；"yaml" 返回目录+yaml/yml；
+// mode: "dir" 返回目录、普通文件和压缩包；文件只用来对照当前层有没有 compose/.env，点文件不会选中为目录；
+// "file" 返回目录+文件；"yaml" 返回目录+yaml/yml；
 // "nacos-zip" 返回目录 + 文件名以 nacos 开头的 .zip（排除 .tar.zip）；
 // "sql" 返回目录 + .sql 文件。
-func listFS(path, mode string) (*FSListResult, error) {
+func listFS(path, mode, target string) (*FSListResult, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
-		return listRoots()
+		res, err := listRoots()
+		if err != nil {
+			return nil, err
+		}
+		if mode == "dir" {
+			res.Hint = judgePickLevel(target, "", nil)
+		}
+		return res, nil
 	}
 	abs, err := filepath.Abs(path)
 	if err != nil {
@@ -66,7 +76,7 @@ func listFS(path, mode string) (*FSListResult, error) {
 	}
 	for _, e := range entries {
 		name := e.Name()
-		if strings.HasPrefix(name, ".") {
+		if strings.HasPrefix(name, ".") && !isListedDotName(name, mode, e.IsDir()) {
 			continue
 		}
 		full := filepath.Join(abs, name)
@@ -75,10 +85,15 @@ func listFS(path, mode string) (*FSListResult, error) {
 			if mode == "dir" {
 				if ak := archiveKind(name); ak != "" {
 					out.Entries = append(out.Entries, FSEntry{
-						Name: name + "  [" + ak + "]", Path: full, IsArchive: true, ArchiveKind: ak,
+						Name:            name,
+						Path:            full,
+						IsArchive:       true,
+						ArchiveKind:     ak,
+						AlreadyExpanded: fetch.ArchiveExpanded(full),
 					})
+					continue
 				}
-				continue
+				// 普通文件继续加入列表，前端只展示、不当作目录选中。
 			}
 			if mode == "yaml" {
 				lower := strings.ToLower(name)
@@ -119,7 +134,19 @@ func listFS(path, mode string) (*FSListResult, error) {
 		}
 		return strings.ToLower(out.Entries[i].Name) < strings.ToLower(out.Entries[j].Name)
 	})
+	if mode == "dir" {
+		out.Hint = judgePickLevel(target, out.Path, out.Entries)
+	}
 	return out, nil
+}
+
+// isListedDotName 目录浏览里放出 .env，方便对照是否选到模块根；其它点文件 / 点目录仍隐藏。
+func isListedDotName(name, mode string, isDir bool) bool {
+	if isDir || (mode != "dir" && mode != "file") {
+		return false
+	}
+	lower := strings.ToLower(name)
+	return lower == ".env" || strings.HasPrefix(lower, ".env.")
 }
 
 func archiveKind(name string) string {
@@ -176,28 +203,111 @@ func listRoots() (*FSListResult, error) {
 	return res, nil
 }
 
+// handleFSExpand 异步解压目录或单个 zip，返回 job（前端轮询进度日志）。
 func (s *Server) handleFSExpand(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", 405)
 		return
 	}
 	var body struct {
-		Dir string `json:"dir"`
+		Dir  string `json:"dir"`
+		File string `json:"file"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		s.writeJSON(w, 400, map[string]string{"error": "请求体无效"})
 		return
 	}
-	if strings.TrimSpace(body.Dir) == "" {
-		s.writeJSON(w, 400, map[string]string{"error": "dir 不能为空"})
+	dir := strings.TrimSpace(body.Dir)
+	file := strings.TrimSpace(body.File)
+	if dir == "" && file == "" {
+		s.writeJSON(w, 400, map[string]string{"error": "请指定要解压的目录或压缩包"})
 		return
 	}
-	res, err := fetch.ExpandArchives(body.Dir)
+	job := s.newJob("fs-expand")
+	go s.runFSExpand(job, dir, file)
+	s.writeJSON(w, 200, job)
+}
+
+// expandJobState 解压任务进度，写入 Job.Result 供前端进度条。
+type expandJobState struct {
+	RootDir      string   `json:"rootDir"`
+	File         string   `json:"file,omitempty"`
+	Steps        []string `json:"steps"`
+	ZipExtracted int      `json:"zipExtracted"`
+	TarUnwrapped int      `json:"tarUnwrapped"`
+	TarFiles     []string `json:"tarFiles,omitempty"`
+	TarGzFiles   []string `json:"tarGzFiles,omitempty"`
+	Done         int      `json:"done"`
+	Total        int      `json:"total"`
+	Percent      int      `json:"percent"`
+	PackPercent  int      `json:"packPercent,omitempty"`
+	Current      string   `json:"current,omitempty"`
+	Entry        string   `json:"entry,omitempty"`
+	FileDone     int      `json:"fileDone,omitempty"`
+	FileTotal    int      `json:"fileTotal,omitempty"`
+	BytesDone    int64    `json:"bytesDone,omitempty"`
+	BytesTotal   int64    `json:"bytesTotal,omitempty"`
+}
+
+func (s *Server) runFSExpand(job *Job, dir, file string) {
+	if file != "" {
+		s.appendLog(job, "解压压缩包: "+file)
+	} else {
+		s.appendLog(job, "解压目录: "+dir)
+	}
+	state := &expandJobState{File: file, RootDir: dir}
+	s.setJobResult(job, state)
+	res, err := fetch.Expand(fetch.ExpandOptions{
+		Root: dir,
+		File: file,
+		Log:  func(line string) { s.appendLog(job, line) },
+		Progress: func(p fetch.ExpandProgress) {
+			s.mu.Lock()
+			state.Done = p.Done
+			state.Total = p.Total
+			state.Percent = p.Percent
+			state.PackPercent = p.PackPercent
+			state.Current = p.Current
+			state.Entry = p.Entry
+			state.FileDone = p.FileDone
+			state.FileTotal = p.FileTotal
+			state.BytesDone = p.BytesDone
+			state.BytesTotal = p.BytesTotal
+			s.mu.Unlock()
+		},
+	})
+	if res != nil {
+		s.mu.Lock()
+		state.RootDir = res.RootDir
+		state.Steps = res.Steps
+		state.ZipExtracted = res.ZipExtracted
+		state.TarUnwrapped = res.TarUnwrapped
+		state.TarFiles = res.TarFiles
+		state.TarGzFiles = res.TarGzFiles
+		if err == nil {
+			state.Percent = 100
+			state.Current = ""
+		}
+		s.mu.Unlock()
+	}
 	if err != nil {
-		s.writeJSON(w, 400, map[string]any{"error": err.Error(), "result": res})
+		s.failJob(job, err.Error())
 		return
 	}
-	s.writeJSON(w, 200, res)
+	msg := fmt.Sprintf("解压完成：zip=%d tar.zip=%d .tar=%d → %s",
+		state.ZipExtracted, state.TarUnwrapped, len(state.TarFiles), state.RootDir)
+	if file != "" {
+		msg = fmt.Sprintf("解压完成：%s → %s", filepath.Base(file), state.RootDir)
+	} else if state.ZipExtracted == 0 && state.TarUnwrapped == 0 {
+		msg = fmt.Sprintf("当前目录已展开过，发现 %d 个 .tar：%s", len(state.TarFiles), state.RootDir)
+	}
+	s.okJob(job, msg)
+}
+
+func (s *Server) setJobResult(j *Job, result any) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	j.Result = result
 }
 
 func parentPath(path string) string {
@@ -211,4 +321,35 @@ func parentPath(path string) string {
 		return ""
 	}
 	return parent
+}
+
+// handleFSExists 批量判断路径是否仍在磁盘上（用于清掉已删除目录的残留填写）。
+func (s *Server) handleFSExists(w http.ResponseWriter, r *http.Request) {
+	var paths []string
+	switch r.Method {
+	case http.MethodGet:
+		paths = r.URL.Query()["path"]
+	case http.MethodPost:
+		var body struct {
+			Paths []string `json:"paths"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			s.writeJSON(w, 400, map[string]string{"error": "invalid json"})
+			return
+		}
+		paths = body.Paths
+	default:
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+	exists := map[string]bool{}
+	for _, p := range paths {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		_, err := os.Stat(p)
+		exists[p] = err == nil
+	}
+	s.writeJSON(w, 200, map[string]any{"exists": exists})
 }

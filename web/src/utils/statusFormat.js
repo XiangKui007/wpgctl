@@ -185,7 +185,20 @@ export function svcIsLocal(s) {
 }
 
 /**
+ * svcIsHostNetwork 判断容器是否走 host 网络（无独立端口映射）。
+ * @param {object} s
+ * @returns {boolean}
+ */
+export function svcIsHostNetwork(s) {
+  return String(svcNetworks(s) || '')
+    .toLowerCase()
+    .split(/[,;]+/)
+    .some((p) => p.trim() === 'host')
+}
+
+/**
  * svcPortChips 从端口原文抽出卡片展示用的短标签。
+ * 兼容 0.0.0.0:1883->1883/tcp，以及 host 网络只写 8080/tcp。
  * @param {object} s
  * @returns {{ visible: string[], more: number }}
  */
@@ -193,16 +206,22 @@ export function svcPortChips(s) {
   const raw = String(svcPorts(s) || '')
   const seen = new Set()
   const ports = []
-  const re = /(?:0\.0\.0\.0|127\.\d+\.\d+\.\d+|\[::\]):(\d+)(?:->(\d+(?:-\d+)?)\/(\w+))?/g
+  const add = (label, key) => {
+    if (!key || seen.has(key)) return
+    seen.add(key)
+    ports.push(label)
+  }
+  const mapped = /(?:0\.0\.0\.0|127\.\d+\.\d+\.\d+|\[::\]):(\d+)(?:->(\d+(?:-\d+)?)\/(\w+))?/g
   let m
-  while ((m = re.exec(raw))) {
+  while ((m = mapped.exec(raw))) {
     const host = m[1]
     const dest = m[2] || host
     const proto = m[3] || 'tcp'
-    const label = dest === host ? `${host}/${proto}` : `${host}→${dest}`
-    if (seen.has(host)) continue
-    seen.add(host)
-    ports.push(label)
+    add(dest === host ? `${host}/${proto}` : `${host}→${dest}`, host)
+  }
+  const exposed = /\b(\d+)\/(tcp|udp)\b/gi
+  while ((m = exposed.exec(raw))) {
+    add(`${m[1]}/${String(m[2]).toLowerCase()}`, m[1])
   }
   const max = 6
   return {

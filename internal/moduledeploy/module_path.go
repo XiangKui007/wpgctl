@@ -14,26 +14,42 @@ var nestedPackNames = []string{"middleware", "middle", "platform"}
 // 兼容多层套包，例如：
 //
 //	root/nginx
-//	root/middleware/nginx
+//	root/middle/nginx
+//	/workspace/middle/middle/nginx
 //	root/middleware/middleware/nginx
-//	sz-waterwork-*/middleware/middleware/nginx
 func ModulePath(root, name string) string {
 	name = strings.TrimSpace(name)
 	if strings.TrimSpace(root) == "" || name == "" {
 		return ""
 	}
-	fallback := filepath.Join(root, name)
-	for _, p := range modulePathCandidates(root, name) {
-		if util.DirExists(p) {
-			return p
-		}
-	}
+	fallback := filepath.Join(root, moduleNameAliases(name)[0])
 	if strings.EqualFold(name, "nginx") {
 		if found := FindNginxModuleDir(root); found != "" {
 			return found
 		}
 	}
+	for _, alias := range moduleNameAliases(name) {
+		for _, p := range modulePathCandidates(root, alias) {
+			if util.DirExists(p) {
+				return p
+			}
+		}
+	}
 	return fallback
+}
+
+// moduleNameAliases 目录别名：waterjob 交付包常见 water-job / water-job-biz。
+func moduleNameAliases(name string) []string {
+	n := strings.ToLower(strings.TrimSpace(name))
+	switch n {
+	case "waterjob", "water-job", "water-job-biz":
+		return []string{"waterjob", "water-job", "water-job-biz"}
+	default:
+		if name == "" {
+			return []string{""}
+		}
+		return []string{name}
+	}
 }
 
 func modulePathCandidates(root, name string) []string {

@@ -44,9 +44,7 @@ export default {
               </tbody>
             </table>
           </div>
-          <div class="log-box" v-if="jobLogs.length">
-            <div v-for="(l, i) in jobLogs" :key="i" :class="logClass(l)">{{ l }}</div>
-          </div>
+          <JobLogBox :lines="jobLogs" :running="!!activeJobKey" />
           <div v-if="smokeRows.length" class="surface" style="margin-top:1rem;padding:1rem">
             <p class="muted">健康矩阵</p>
             <table class="table">

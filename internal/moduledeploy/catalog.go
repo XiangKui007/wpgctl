@@ -19,6 +19,7 @@ type ModuleSpec struct {
 }
 
 // Modules 返回某阶段按顺序部署的模块清单。
+// Name 必须与包目录名、前端 catalog.js 的服务 id、site.yaml nodes[].services 相同。
 func Modules(phase Phase) []ModuleSpec {
 	switch phase {
 	case PhaseDatabase:
@@ -36,6 +37,7 @@ func Modules(phase Phase) []ModuleSpec {
 			{Name: "minio", Label: "MinIO", Required: false},
 			{Name: "influxdb", Label: "InfluxDB", Required: false},
 			{Name: "emqx", Label: "EMQX", Required: false},
+			{Name: "waterjob", Label: "WaterJob（XXL-JOB）", Required: false},
 		}
 	case PhaseBusiness:
 		return []ModuleSpec{
@@ -43,14 +45,14 @@ func Modules(phase Phase) []ModuleSpec {
 			{Name: "device", Label: "设备 device", Required: false},
 			{Name: "alarm", Label: "报警 alarm", Required: false},
 			{Name: "graph", Label: "组态 graph", Required: false},
-			{Name: "gis", Label: "GIS", Required: false},
+			{Name: "gis", Label: "GIS（giscenter + gisdefault）", Required: false},
 			{Name: "monitor", Label: "监控 monitor", Required: false},
 			{Name: "report-center", Label: "报表 report-center", Required: false},
 			{Name: "out-work", Label: "out-work", Required: false},
 		}
 	case PhaseStandalone:
 		return []ModuleSpec{
-			{Name: "waterwork", Label: "市政水厂", Required: false},
+			{Name: "waterwork", Label: "市政水厂（center / device 分套部署）", Required: false},
 			{Name: "intelligent-model", Label: "模型服务", Required: false},
 		}
 	default:

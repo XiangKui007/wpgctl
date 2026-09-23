@@ -32,6 +32,7 @@ func newModuleDeployCmd() *cobra.Command {
 		patchEnv     bool
 		composeUp    bool
 		composeBuild bool
+		subService   string
 		nacosZips    []string
 	)
 	c := &cobra.Command{
@@ -65,6 +66,7 @@ func newModuleDeployCmd() *cobra.Command {
 				PatchEnv:     patchEnv,
 				ComposeUp:    composeUp,
 				ComposeBuild: composeBuild,
+				SubService:   subService,
 			})
 			if res != nil {
 				for _, s := range res.Steps {
@@ -94,6 +96,7 @@ func newModuleDeployCmd() *cobra.Command {
 	c.Flags().BoolVar(&patchEnv, "patch-env", false, "按 site.yaml 更新 .env / compose 内中间件地址")
 	c.Flags().BoolVar(&composeUp, "compose-up", false, "docker compose up -d")
 	c.Flags().BoolVar(&composeBuild, "compose-build", false, "docker compose up -d --build（市政 / 模型：先 load java8.tar，再从 jar 构建）")
+	c.Flags().StringVar(&subService, "sub-service", "", "市政水厂只部署其中一套：center 或 device；空则两套都部署。两套 .env 仍会一起改写")
 	c.Flags().StringArrayVar(&nacosZips, "nacos-zip", nil, "nacos 模块启动后直接上传导入的 nacos*.zip（可重复，不解压）")
 	return c
 }

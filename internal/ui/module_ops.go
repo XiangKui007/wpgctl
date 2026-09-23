@@ -102,6 +102,7 @@ func (s *Server) handleModuleDeploy(w http.ResponseWriter, r *http.Request) {
 		ComposeBuild    bool     `json:"composeBuild"`
 		NacosConfigZips []string `json:"nacosConfigZips"`
 		AutoNacosImport bool     `json:"autoNacosImport"`
+		SubService      string   `json:"subService"` // 市政水厂：center / device，只启动其中一套 compose
 		// 多机：目标节点（site.yaml 中的 name 或 ip）；为空或为本机时在主控机本地执行
 		Node        string `json:"node"`
 		SSHPassword string `json:"sshPassword"`
@@ -152,6 +153,7 @@ func (s *Server) handleModuleDeploy(w http.ResponseWriter, r *http.Request) {
 					PatchEnv:     body.PatchEnv,
 					ComposeUp:    body.ComposeUp,
 					ComposeBuild: body.ComposeBuild,
+					SubService:   body.SubService,
 					SyncFiles:    syncFiles,
 					ForceSync:    body.ForceSync,
 				},
@@ -184,6 +186,7 @@ func (s *Server) handleModuleDeploy(w http.ResponseWriter, r *http.Request) {
 			PatchEnv:     body.PatchEnv,
 			ComposeUp:    body.ComposeUp,
 			ComposeBuild: body.ComposeBuild,
+			SubService:   body.SubService,
 		})
 		job.Result = res
 		if err != nil {
@@ -249,7 +252,8 @@ func (s *Server) handleNginxPatch(w http.ResponseWriter, r *http.Request) {
 		ExpandHTML     bool   `json:"expandHtml"`
 		ComposeUp      bool   `json:"composeUp"`
 		SkipProxyPatch bool   `json:"skipProxyPatch"`
-		// 多机：目标节点与 SSH 凭据
+		Force          bool   `json:"force"` // 已在运行仍强制重部
+		// Node 若指向从机则忽略：Nginx / 前端只在主控机部署。
 		Node        string `json:"node"`
 		SSHPassword string `json:"sshPassword"`
 		SSHKeyPath  string `json:"sshKeyPath"`
@@ -276,33 +280,11 @@ func (s *Server) handleNginxPatch(w http.ResponseWriter, r *http.Request) {
 		moduleDir = filepath.Dir(filepath.Dir(body.NginxDir))
 		layout = moduledeploy.ResolveNginxLayout(moduleDir)
 	}
-	syncFiles := body.SyncFiles == nil || *body.SyncFiles
 
 	job := s.newJob("nginx-patch")
 	go func() {
 		if target, ok := remotedeploy.FindNode(site, body.Node); ok && remotedeploy.IsRemote(target) {
-			res, rerr := remotedeploy.RunNginx(
-				remotedeploy.Target{Node: target, SSHPassword: body.SSHPassword, SSHKeyPath: body.SSHKeyPath, SitePath: s.opts.SitePath},
-				remotedeploy.NginxOptions{
-					NginxDir:       moduleDir,
-					GatewayIP:      gw,
-					AppIP:          body.AppIP,
-					GraphIP:        body.GraphIP,
-					ExpandHTML:     body.ExpandHTML,
-					ComposeUp:      body.ComposeUp,
-					SkipProxyPatch: body.SkipProxyPatch,
-					SyncFiles:      syncFiles,
-					ForceSync:      body.ForceSync,
-				},
-				func(line string) { s.appendLog(job, line) },
-			)
-			job.Result = res
-			if rerr != nil {
-				s.failJob(job, rerr.Error())
-				return
-			}
-			s.okJob(job, fmt.Sprintf("Nginx 已在 %s (%s) 更新完成", target.Name, target.IP))
-			return
+			s.appendLog(job, fmt.Sprintf("Nginx / 前端只在主控机部署，忽略从机 %s（%s），不经 SSH 上传 html", target.Name, target.IP))
 		}
 		s.appendLog(job, "nginx 模块目录: "+moduleDir)
 		if body.ExpandHTML {
@@ -323,6 +305,7 @@ func (s *Server) handleNginxPatch(w http.ResponseWriter, r *http.Request) {
 				Graph:   body.GraphIP,
 			},
 			ComposeUp: body.ComposeUp,
+			Force:     body.Force,
 		})
 		if err != nil {
 			s.failJob(job, err.Error())
@@ -343,10 +326,74 @@ func (s *Server) handleNginxPatch(w http.ResponseWriter, r *http.Request) {
 			"changes": patchRes.ProxyNotes,
 			"expand":  patchRes.ExpandHTML,
 			"compose": patchRes.Compose,
+			"skipped": patchRes.Skipped,
+			"runtime": patchRes.Runtime,
+		}
+		if patchRes.Skipped {
+			s.okJob(job, "Nginx 已在运行，已跳过")
+			return
 		}
 		s.okJob(job, "Nginx 部署完成")
 	}()
 	s.writeJSON(w, 202, job)
+}
+
+// handleNginxStatus 查询本机该 nginx 模块 compose 是否已在跑，供向导决定跳过。
+func (s *Server) handleNginxStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+	dir := strings.TrimSpace(r.URL.Query().Get("dir"))
+	if dir == "" {
+		s.writeJSON(w, 400, map[string]string{"error": "请指定 nginx 目录 dir"})
+		return
+	}
+	layout := moduledeploy.ResolveNginxLayout(dir)
+	s.writeJSON(w, 200, moduledeploy.InspectNginxRuntime(layout.ModuleDir))
+}
+
+func (s *Server) handleFirewallStatus(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		s.writeJSON(w, 200, fw.Snapshot())
+	case http.MethodPost:
+		var body struct {
+			Node        string `json:"node"`
+			SSHPassword string `json:"sshPassword"`
+			SSHKeyPath  string `json:"sshKeyPath"`
+		}
+		if r.Body != nil {
+			_ = json.NewDecoder(r.Body).Decode(&body)
+		}
+		nodeKey := strings.TrimSpace(body.Node)
+		if nodeKey == "" {
+			s.writeJSON(w, 200, fw.Snapshot())
+			return
+		}
+		site, err := config.LoadSite(s.opts.SitePath)
+		if err != nil {
+			s.writeJSON(w, 400, map[string]string{"error": err.Error()})
+			return
+		}
+		target, ok := remotedeploy.FindNode(site, nodeKey)
+		if !ok {
+			s.writeJSON(w, 400, map[string]string{"error": "未找到节点: " + nodeKey})
+			return
+		}
+		if !remotedeploy.IsRemote(target) {
+			s.writeJSON(w, 200, fw.Snapshot())
+			return
+		}
+		view, err := snapshotRemoteFirewall(target, body.SSHPassword, body.SSHKeyPath)
+		if err != nil {
+			s.writeJSON(w, 400, map[string]string{"error": err.Error()})
+			return
+		}
+		s.writeJSON(w, 200, view)
+	default:
+		http.Error(w, "method not allowed", 405)
+	}
 }
 
 func (s *Server) handleFirewallPorts(w http.ResponseWriter, r *http.Request) {
@@ -434,7 +481,14 @@ func (s *Server) handleFirewallStart(w http.ResponseWriter, r *http.Request) {
 	}
 	job := s.newJob("firewall-start")
 	go func() {
-		st, err := fw.Start()
+		before := fw.Inspect()
+		s.appendLog(job, fmt.Sprintf("启动前: %s (%s)；将放行 SSH %d 与控制台 %d", before.Tool, before.Detail, fw.SSHPort, fw.UIPort))
+		var extra []int
+		if p := fw.ParseListenPort(s.opts.Listen); p > 0 && p != fw.UIPort {
+			extra = append(extra, p)
+			s.appendLog(job, fmt.Sprintf("额外放行当前监听端口 %d/tcp", p))
+		}
+		st, err := fw.StartWithExtra(extra)
 		job.Result = st
 		if err != nil {
 			s.failJob(job, err.Error())
@@ -442,6 +496,34 @@ func (s *Server) handleFirewallStart(w http.ResponseWriter, r *http.Request) {
 		}
 		s.appendLog(job, fmt.Sprintf("防火墙 %s 已启动 (%s)", st.Tool, st.Detail))
 		s.okJob(job, "防火墙已启动")
+	}()
+	s.writeJSON(w, 202, job)
+}
+
+func (s *Server) handleFirewallReload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+	job := s.newJob("firewall-reload")
+	go func() {
+		st := fw.Inspect()
+		s.appendLog(job, fmt.Sprintf("reload 前: %s (%s)", st.Tool, st.Detail))
+		after, err := fw.Reload()
+		if after != nil {
+			job.Result = after
+		}
+		if err != nil {
+			s.failJob(job, err.Error())
+			return
+		}
+		if st.Tool == "ufw" {
+			s.appendLog(job, "ufw 规则即时生效，无需 reload")
+			s.okJob(job, "ufw 无需 reload")
+			return
+		}
+		s.appendLog(job, "firewall-cmd --reload 完成，已重启 docker 以重建 iptables")
+		s.okJob(job, "防火墙已 reload")
 	}()
 	s.writeJSON(w, 202, job)
 }

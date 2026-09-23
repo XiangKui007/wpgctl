@@ -6,31 +6,31 @@
   --ink-soft: #4a6b72;
   --paper: #eef8f6;
   --surface: #ffffff;
-  --water: #0c9b8a;
-  --water-soft: #d5f5ef;
-  --water-deep: #08665c;
-  --water-glow: #1ad4be;
-  --accent: #f59e0b;
-  --accent-soft: #fff6de;
+  --water: #12b5a2;
+  --water-soft: #c8faf3;
+  --water-deep: #0a7a6e;
+  --water-glow: #2ef0d4;
+  --accent: #ffb020;
+  --accent-soft: #fff4d2;
   --line: rgba(8, 90, 82, 0.14);
-  --ok: #059669;
-  --warn: #d97706;
-  --danger: #dc2626;
+  --ok: #12c48a;
+  --warn: #f59e0b;
+  --danger: #ef4444;
   --radius: 8px;
   --shadow: 0 1px 2px rgba(8, 70, 64, 0.05), 0 10px 28px rgba(8, 70, 64, 0.07);
   --font-display: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
   --font-body: "Segoe UI", "PingFang SC", "Microsoft YaHei", "Noto Sans SC", sans-serif;
   --page: 1160px;
-  --el-color-primary: #0c9b8a;
-  --el-color-primary-light-3: #3ab5a6;
-  --el-color-primary-light-5: #6bcdc2;
-  --el-color-primary-light-7: #9de0d8;
-  --el-color-primary-light-8: #c5efe9;
-  --el-color-primary-light-9: #e6faf6;
-  --el-color-primary-dark-2: #08665c;
-  --el-color-success: #059669;
-  --el-color-warning: #d97706;
-  --el-color-danger: #dc2626;
+  --el-color-primary: #12b5a2;
+  --el-color-primary-light-3: #3ed4c2;
+  --el-color-primary-light-5: #6ee3d4;
+  --el-color-primary-light-7: #9ceee4;
+  --el-color-primary-light-8: #c5f7f0;
+  --el-color-primary-light-9: #e6fcf8;
+  --el-color-primary-dark-2: #0a7a6e;
+  --el-color-success: #12c48a;
+  --el-color-warning: #f59e0b;
+  --el-color-danger: #ef4444;
   --el-border-radius-base: 8px;
   --el-font-family: var(--font-body);
 }
@@ -52,8 +52,8 @@ body {
   font-family: var(--font-body);
   color: var(--ink);
   background:
-    radial-gradient(820px 460px at 92% -8%, rgba(26, 212, 190, 0.28), transparent 58%),
-    radial-gradient(640px 380px at -8% 100%, rgba(12, 155, 138, 0.12), transparent 52%),
+    radial-gradient(820px 460px at 92% -8%, rgba(46, 240, 212, 0.32), transparent 58%),
+    radial-gradient(640px 380px at -8% 100%, rgba(18, 181, 162, 0.16), transparent 52%),
     linear-gradient(180deg, #f4fcfa 0%, #e6f4f1 100%);
 }
 
@@ -77,4 +77,34 @@ button:disabled {
   min-height: 100vh;
   display: grid;
   grid-template-rows: auto 1fr;
+}
+
+/* 顶部细进度条：任何 busy 都亮，替代全屏遮罩，不挡日志与滚动。 */
+.app-progress {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 5px;
+  z-index: 40;
+  background: #9ef5e8;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.app-progress::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -40%;
+  width: 40%;
+  background: linear-gradient(90deg, transparent, var(--water-glow), #fff, var(--water-glow), transparent);
+  animation: app-progress-slide 1.1s ease-in-out infinite;
+}
+
+@keyframes app-progress-slide {
+  to {
+    left: 100%;
+  }
 }

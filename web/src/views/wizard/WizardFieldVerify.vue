@@ -13,9 +13,6 @@ export default {
 <template>
         <div>
           <p class="wizard-step-purpose">{{ currentStepPurpose }}</p>
-          <div class="hint-banner">
-            <strong>步骤 8 / 8</strong> — 检查前面步骤部署的容器是否运行，以及 MySQL / Redis / Nacos / Kafka / Nginx 等关键端口是否可连通（多机时通过 SSH 汇总从机容器）。
-          </div>
           <p v-if="verifyReport" class="muted" style="margin-top:0.75rem">
             {{ verifyReport.summary }}
             <span
@@ -69,9 +66,7 @@ export default {
             </el-button>
             <el-button plain @click="goToStep(6)">返回</el-button>
           </div>
-          <div class="log-box" v-if="jobLogs.length">
-            <div v-for="(l, i) in jobLogs" :key="'vf'+i" :class="logClass(l)">{{ l }}</div>
-          </div>
+          <JobLogBox :lines="jobLogs" :running="!!activeJobKey" />
           <div class="actions" v-if="fieldStepDone.verify || verifyDone">
             <el-button type="primary" @click="goStatus">完成，查看服务状态</el-button>
           </div>

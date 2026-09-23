@@ -6,9 +6,68 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/wpg/wpgctl/internal/config"
 	"github.com/wpg/wpgctl/internal/util"
 )
+
+// ResolveWorkbookPath 把「开始前」所选父目录解析成工作簿根。
+// 选 / 或盘符根 → {根}/workspace；路径里已有名为 workspace 的祖先则用那一层（避免把交付包目录当工作簿）。
+// 相对路径（例如只填了包名）忽略，回落默认 /workspace。空输入同默认。
+func ResolveWorkbookPath(parent string) string {
+	p := strings.TrimSpace(parent)
+	if p == "" {
+		return defaultWorkbookPath()
+	}
+	p = filepath.Clean(p)
+	if isPathRoot(p) {
+		return filepath.Join(p, "workspace")
+	}
+	if !filepath.IsAbs(p) {
+		return defaultWorkbookPath()
+	}
+	if ws := workbookAncestor(p); ws != "" {
+		return ws
+	}
+	return filepath.Join(p, "workspace")
+}
+
+func defaultWorkbookPath() string {
+	if runtime.GOOS == "windows" {
+		return filepath.Clean("D:/workspace")
+	}
+	return "/workspace"
+}
+
+func isPathRoot(p string) bool {
+	if p == string(filepath.Separator) || p == "/" {
+		return true
+	}
+	vol := filepath.VolumeName(p)
+	if vol == "" {
+		return false
+	}
+	rest := strings.TrimPrefix(p, vol)
+	return rest == "" || rest == `\` || rest == "/"
+}
+
+// workbookAncestor 从 path 向上找到名为 workspace 的目录；没有则返回空串。
+func workbookAncestor(path string) string {
+	cur := path
+	for i := 0; i < 32; i++ {
+		base := filepath.Base(cur)
+		if strings.EqualFold(base, "workspace") {
+			return cur
+		}
+		if isPathRoot(cur) {
+			return ""
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return ""
+		}
+		cur = parent
+	}
+	return ""
+}
 
 // DirStatus 单个目录探测结果。
 type DirStatus struct {
@@ -25,35 +84,24 @@ type WorkspaceProbe struct {
 	Dirs      []DirStatus `json:"dirs"`
 }
 
-// workspaceDirList 返回工作簿相关目录（探测 / 创建共用）。
-func workspaceDirList(workspace, nginxHTML string) []DirStatus {
+// workspaceDirList 开始前只探测/创建工作簿根本身，不建交付包、不建 rendered/bak。
+func workspaceDirList(workspace string) []DirStatus {
 	ws := strings.TrimSpace(workspace)
-	html := strings.TrimSpace(nginxHTML)
-	out := []DirStatus{
-		{Path: ws, Label: "workspace"},
-		{Path: filepath.Join(ws, "rendered"), Label: "rendered"},
-		{Path: filepath.Join(ws, "bak"), Label: "bak"},
+	if ws == "" {
+		return nil
 	}
-	if html != "" {
-		out = append(out, DirStatus{Path: html, Label: "nginxHtml"})
-	}
-	if runtime.GOOS == "linux" && ws != "" {
-		site := &config.SiteConfig{Paths: config.PathsConfig{Workspace: ws}}
-		out = append(out, DirStatus{Path: DockerDataRoot(site), Label: "docker_data"})
-	}
-	return out
+	return []DirStatus{{Path: ws, Label: "workspace"}}
 }
 
-// ProbeWorkspace 检查工作簿目录是否已初始化（仅探测，不创建）。
-func ProbeWorkspace(workspace, nginxHTML string) (*WorkspaceProbe, error) {
+// ProbeWorkspace 检查工作簿根是否已存在（仅探测，不创建）。
+func ProbeWorkspace(workspace, _ string) (*WorkspaceProbe, error) {
 	ws := strings.TrimSpace(workspace)
 	if ws == "" {
 		return nil, fmt.Errorf("workspace 路径不能为空")
 	}
 	probe := &WorkspaceProbe{
 		Workspace: ws,
-		NginxHTML: strings.TrimSpace(nginxHTML),
-		Dirs:      workspaceDirList(ws, nginxHTML),
+		Dirs:      workspaceDirList(ws),
 		Ready:     true,
 	}
 	for i := range probe.Dirs {
@@ -65,7 +113,7 @@ func ProbeWorkspace(workspace, nginxHTML string) (*WorkspaceProbe, error) {
 	return probe, nil
 }
 
-// InitWorkspaceDirs 仅创建工作簿相关目录（不装 Docker、不开防火墙）。
+// InitWorkspaceDirs 开始前只创建工作簿根（如 /workspace）；已有则跳过。
 func InitWorkspaceDirs(workspace, nginxHTML string) (*WorkspaceProbe, []string, error) {
 	probe, err := ProbeWorkspace(workspace, nginxHTML)
 	if err != nil {

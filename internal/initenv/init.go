@@ -1,6 +1,7 @@
 // Package initenv 实现环境初始化（方案 §6.3），要求幂等。
 //
-// 步骤：安装 Docker 静态二进制 → 建目录 → 防火墙放行 → 内核参数。
+// 步骤：安装 Docker 静态二进制 → 建目录 → 检查/启动防火墙并放行 SSH 22 与控制台 9527 → 内核参数。
+// 业务端口不在 Init 猜测，由后续各模块部署时解析 compose/.env 再放行。
 package initenv
 
 import (
@@ -20,15 +21,16 @@ import (
 
 // Options 初始化选项。
 type Options struct {
-	Site        *config.SiteConfig
-	Manifest    *config.Manifest
+	Site          *config.SiteConfig
+	Manifest      *config.Manifest
 	BasePackage   string // base 包解压目录，含 docker-install/
 	DockerPackage string // legacy：含 offline_install_docker.sh 的 docker_package 目录
 	LocalOnly     bool   // 仅本机，不做 SSH 分发
-	SitePath    string // 用于分发到远端的 site.yaml 路径
-	SSHPassword string
-	SSHKeyPath  string
-	Log         func(string) // 多机分发日志回调（UI 逐行回传）；为空则打印到终端
+	SitePath      string // 用于分发到远端的 site.yaml 路径
+	SSHPassword   string
+	SSHKeyPath    string
+	Log           func(string) // 多机分发日志回调（UI 逐行回传）；为空则打印到终端
+	UIListen      string       // 控制台 --listen 地址，启动防火墙时一并放行该端口
 }
 
 // Result 初始化结果摘要。
@@ -78,7 +80,7 @@ func Run(opts Options) (*Result, error) {
 }
 
 // distributeInit 多机：逐台从机上传 site.yaml + wpgctl + Docker 离线包，远程执行 `init --local`
-// （从机同样安装 Docker、建目录、放行防火墙）。日志逐行回传到 opts.Log。
+// （从机同样安装 Docker、建目录、启动防火墙并放行 SSH 22 与控制台 9527）。日志逐行回传到 opts.Log。
 func distributeInit(opts Options, res *Result) error {
 	remoteNodes := remoteNodes(opts.Site.Nodes)
 	if len(remoteNodes) == 0 {
@@ -153,21 +155,24 @@ func initOneRemote(opts Options, n config.Node, log func(string)) error {
 			args = append(args, "--docker-package", remoteDocker)
 		}
 	} else {
-		log("未提供 Docker 离线包：从机仅做目录 / 防火墙 / 内核参数初始化（需已自带 Docker）")
+		log("未提供 Docker 离线包：从机仅做目录 / 防火墙(SSH 22、控制台 9527) / 内核参数初始化（需已自带 Docker）")
 	}
 	return sess.RunWpgctl(args, func(line string) {
 		log("[" + n.Name + "] " + line)
 	})
 }
 
+// ensureDirs 只建当前流程一定会用到的目录。
+// rendered/（一键 deploy 渲染输出）与 bak/（upgrade 备份）由各自流程在需要时自建，
+// 现场逐步向导不走这两条路，提前建出来只会让 /workspace 多两个空目录惹人疑。
 func ensureDirs(site *config.SiteConfig, res *Result) error {
 	dirs := []string{
 		site.Paths.Workspace,
-		site.Paths.NginxHTML,
-		filepath.Join(site.Paths.Workspace, "rendered"),
-		filepath.Join(site.Paths.Workspace, "bak"),
 		util.PackagesDir(),
 		util.StateDir(),
+	}
+	if strings.TrimSpace(site.Paths.NginxHTML) != "" {
+		dirs = append(dirs, site.Paths.NginxHTML)
 	}
 	if runtime.GOOS == "linux" {
 		dirs = append(dirs, DockerDataRoot(site))
@@ -296,26 +301,27 @@ func ensureDocker(opts Options, res *Result) error {
 }
 
 func ensureFirewall(opts Options, res *Result) error {
-	if opts.Manifest == nil || opts.Site == nil {
-		res.Skipped = append(res.Skipped, "firewall")
-		return nil
-	}
 	if runtime.GOOS != "linux" {
 		res.Skipped = append(res.Skipped, "firewall")
 		return nil
 	}
-	ports := opts.Manifest.Ports(opts.Site.Profiles)
-	fr, err := fw.OpenPorts(ports)
+	extra := []int{}
+	if p := fw.ParseListenPort(opts.UIListen); p > 0 {
+		extra = append(extra, p)
+	}
+	res.Messages = append(res.Messages, "检查防火墙：启动（如未运行）并放行 SSH 22 与控制台端口；业务端口在部署各服务时再放行")
+	fr, err := fw.EnsureReadyPorts(extra)
 	if err != nil {
 		util.Warnf("防火墙配置未完成: %v", err)
 		res.Messages = append(res.Messages, "firewall: "+err.Error())
 	}
 	if fr != nil {
+		res.Messages = append(res.Messages, fr.Messages...)
 		res.PortsOpened = append(res.PortsOpened, fr.Opened...)
 		res.PortsOpened = append(res.PortsOpened, fr.Skipped...)
-	}
-	if fr != nil && fr.Firewall == "none" {
-		res.Skipped = append(res.Skipped, "firewall")
+		if fr.Firewall == "none" {
+			res.Skipped = append(res.Skipped, "firewall")
+		}
 	}
 	return nil
 }

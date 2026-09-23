@@ -109,6 +109,51 @@ func TestFindComposeProjects_WaterworkCenterAndDevice(t *testing.T) {
 	}
 }
 
+func TestFindComposeProjects_GISCenterAndDefault(t *testing.T) {
+	root := t.TempDir()
+	pkg := filepath.Join(root, "gis")
+	center := writeCompose(t, filepath.Join(pkg, "giscenter"))
+	def := writeCompose(t, filepath.Join(pkg, "gisdefault"))
+	got, err := findComposeProjects(pkg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("want 2 projects, got %v", got)
+	}
+	if filepath.Clean(got[0]) != filepath.Clean(center) {
+		t.Fatalf("giscenter first: %v", got)
+	}
+	if filepath.Clean(got[1]) != filepath.Clean(def) {
+		t.Fatalf("gisdefault second: %v", got)
+	}
+}
+
+func TestProjectsForModule_WaterworkSubService(t *testing.T) {
+	root := t.TempDir()
+	pkg := filepath.Join(root, "sz-waterwork-4.1.1-pg")
+	center := writeCompose(t, filepath.Join(pkg, "waterwork-center"))
+	device := writeCompose(t, filepath.Join(pkg, "waterwork-device"))
+	got, err := projectsForModule(pkg, "device")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || filepath.Clean(got[0]) != filepath.Clean(device) {
+		t.Fatalf("device only: %v", got)
+	}
+	got, err = projectsForModule(pkg, "center")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || filepath.Clean(got[0]) != filepath.Clean(center) {
+		t.Fatalf("center only: %v", got)
+	}
+	got, err = projectsForModule(pkg, "")
+	if err != nil || len(got) != 2 {
+		t.Fatalf("all: %v %v", got, err)
+	}
+}
+
 func TestFindComposeProjects_NestedZipLayer(t *testing.T) {
 	root := t.TempDir()
 	pkg := filepath.Join(root, "waterwork-4.1.1-pg")

@@ -4,6 +4,7 @@ package status
 import (
 	"archive/tar"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -182,10 +183,15 @@ func ShowStatus(site *config.SiteConfig, composeDir string) error {
 	return nil
 }
 
-// ShowLogs 输出指定服务日志。
+// ShowLogs 输出指定服务日志；follow 时走 docker logs -f 按行打印。
 func ShowLogs(service string, tail int, follow bool) error {
 	d := dockerx.New()
-	out, err := d.Logs(service, tail, follow)
+	if follow {
+		return d.LogsFollow(context.Background(), service, tail, func(line string) {
+			fmt.Println(line)
+		})
+	}
+	out, err := d.Logs(service, tail, false)
 	if err != nil {
 		return err
 	}

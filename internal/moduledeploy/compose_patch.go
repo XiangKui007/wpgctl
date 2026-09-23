@@ -97,15 +97,17 @@ func PatchComposeEnv(composePath string, repl map[string]string) ([]string, erro
 	return changed, nil
 }
 
-// PatchComposeEnvForSite 对模块目录内全部 compose 应用站点级 environment 补丁。
+// PatchComposeEnvForSite 只改 Kafka 的 compose environment（KAFKA_ADVERTISED_LISTENERS）。
+// 平台 / 市政 / 模型 / GIS 等有 .env 的模块一律不动 docker-compose.yaml，站点差异走 PatchEnvTree 写 .env；
+// 这里对它们是空操作（compose 里没有 KAFKA_ADVERTISED_LISTENERS 行就不会改任何东西）。
 func PatchComposeEnvForSite(moduleDir string, site *config.SiteConfig) ([]string, error) {
+	repl := ComposeEnvReplacements(site)
+	if len(repl) == 0 {
+		return nil, nil
+	}
 	projects, err := findComposeProjects(moduleDir)
 	if err != nil {
 		// 市政/模型等目录若尚未找到 compose，Kafka 补丁可跳过，后续 compose up 会给出明确错误
-		return nil, nil
-	}
-	repl := ComposeEnvReplacements(site)
-	if len(repl) == 0 {
 		return nil, nil
 	}
 	var all []string

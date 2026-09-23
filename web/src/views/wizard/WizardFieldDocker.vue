@@ -1,9 +1,11 @@
 ﻿<script>
 /** 现场向导 ②：离线安装 Docker。 */
 import { useConsole } from '@/composables/useConsole.js'
+import WizardFirewallPanel from './WizardFirewallPanel.vue'
 
 export default {
   name: 'WizardFieldDocker',
+  components: { WizardFirewallPanel },
   setup() {
     return useConsole()
   },
@@ -13,10 +15,31 @@ export default {
 <template>
         <div>
           <p class="wizard-step-purpose">{{ currentStepPurpose }}</p>
-          <div class="hint-banner">
-            <strong>步骤 2 / 8</strong> — 在本机（主控）执行 Docker 离线安装；数据目录指向 <code>/workspace/docker_data/docker/lib</code>（与工作簿同盘）。
-            <template v-if="isMultiNode"> 多机时 Init 还会通过 SSH 把 wpgctl 与 Docker 离线包上传到每台从机并安装 Docker、建目录、放行防火墙（凭据在上方「SSH 分发到从机」填写）。</template>
+          <div class="node-docker-list">
+            <div class="node-section-head">
+              <div>
+                <strong>各机器 Docker</strong>
+                <p class="muted">状态挂在对应机器后面，避免和顶栏「本机 Docker」搞混。</p>
+              </div>
+              <el-button type="primary" plain size="small" :loading="nodeDockerBusy" @click="refreshNodeDocker">
+                {{ nodeDockerBusy ? '检查中…' : '重新检查' }}
+              </el-button>
+            </div>
+            <ul>
+              <li v-for="(n, idx) in siteForm.nodes" :key="idx">
+                <span class="node-number">{{ idx + 1 }}</span>
+                <strong>{{ n.name || `机器 ${idx + 1}` }}</strong>
+                <code>{{ n.ip || '未填 IP' }}</code>
+                <span v-if="idx === 0" class="badge green">主控</span>
+                <span
+                  class="badge"
+                  :class="nodeDockerOf(n).ok ? 'green' : 'yellow'"
+                  :title="nodeDockerOf(n).message || ''"
+                >{{ nodeDockerLabel(n) || (nodeDockerBusy ? 'Docker 检查中' : '未检查') }}</span>
+              </li>
+            </ul>
           </div>
+          <WizardFirewallPanel />
           <div class="field-grid" style="margin-top:0.75rem">
             <div class="field full">
               <label class="req">Docker 离线包目录</label>
@@ -32,9 +55,7 @@ export default {
             </el-button>
             <el-button plain @click="goToStep(0)">返回</el-button>
           </div>
-          <div class="log-box" v-if="jobLogs.length">
-            <div v-for="(l, i) in jobLogs" :key="i" :class="logClass(l)">{{ l }}</div>
-          </div>
+          <JobLogBox :lines="jobLogs" :running="!!activeJobKey" />
           <div class="actions" v-if="initDone">
             <el-button type="primary" @click="completeFieldStep('docker', 2)">Docker 就绪，进入 ③ 数据库</el-button>
           </div>

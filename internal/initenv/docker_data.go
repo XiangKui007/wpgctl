@@ -10,7 +10,7 @@ import (
 const defaultDockerDataRoot = "/workspace/docker_data/docker/lib"
 
 // DockerDataRoot 返回 dockerd --graph 数据目录。
-// 现场工作簿根为 /workspace，其下并列 platform、middleware（或 middle）、sz-waterwork 与 docker_data。
+// 现场工作簿根为 /workspace，其下并列 platform、middleware（或 middle）、docker_data 以及用户上传的交付包。
 // 对应：ExecStart=/usr/bin/dockerd --graph /workspace/docker_data/docker/lib/
 func DockerDataRoot(site *config.SiteConfig) string {
 	if site == nil || strings.TrimSpace(site.Paths.Workspace) == "" {

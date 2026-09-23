@@ -55,7 +55,26 @@ func (s *Server) handleDBApply(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		job.Result = res
-		s.okJob(job, fmt.Sprintf("SQL 执行完成：成功 %d 个", len(res.Applied)))
+		s.okJob(job, fmt.Sprintf("SQL 执行完成：成功 %d 个文件，%s", len(res.Applied), summarizeDBs(res)))
 	}()
 	s.writeJSON(w, 202, job)
+}
+
+// summarizeDBs 把各库落表数压成一句：库 wpg_intelligent_model（新建）12 张表；库 wpg_waterwork 58 张表。
+func summarizeDBs(res *db.Result) string {
+	if res == nil || len(res.Databases) == 0 {
+		if res != nil && res.Database != "" {
+			return fmt.Sprintf("库 %s %d 张表", res.Database, len(res.Tables))
+		}
+		return "无库信息"
+	}
+	parts := make([]string, 0, len(res.Databases))
+	for _, d := range res.Databases {
+		tag := ""
+		if d.Created {
+			tag = "（新建）"
+		}
+		parts = append(parts, fmt.Sprintf("库 %s%s %d 张表", d.Database, tag, len(d.Tables)))
+	}
+	return strings.Join(parts, "；")
 }

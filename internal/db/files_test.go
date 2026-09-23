@@ -97,3 +97,54 @@ func TestApplyFiles_RequiresFiles(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 }
+
+func TestResolveTargetDB_FromFilename(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "wpg_waterwork_quartz_pg.sql")
+	if err := os.WriteFile(p, []byte("-- quartz\nSELECT 1;\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	name, src := resolveTargetDB(DriverPgSQL, "", &config.SiteConfig{}, []string{p}, func(string) {})
+	if name != "wpg_waterwork" {
+		t.Fatalf("got %q (%s)", name, src)
+	}
+}
+
+// 多选文件时各文件按自己的文件名切库，模型库不能落进水厂库。
+func TestResolveTargetDB_PerFile(t *testing.T) {
+	dir := t.TempDir()
+	ww := filepath.Join(dir, "wpg_waterwork_pg.sql")
+	im := filepath.Join(dir, "wpg_intelligent_model_pg.sql")
+	for _, p := range []string{ww, im} {
+		if err := os.WriteFile(p, []byte("CREATE TABLE t(id int);\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fixed, _ := fixedTargetDB(DriverPgSQL, "", &config.SiteConfig{})
+	if fixed != "" {
+		t.Fatalf("no fixed db expected, got %q", fixed)
+	}
+	if n, _ := resolveTargetDB(DriverPgSQL, "", nil, []string{ww}, func(string) {}); n != "wpg_waterwork" {
+		t.Fatalf("waterwork → %q", n)
+	}
+	if n, _ := resolveTargetDB(DriverPgSQL, "", nil, []string{im}, func(string) {}); n != "wpg_intelligent_model" {
+		t.Fatalf("intelligent model → %q", n)
+	}
+	site := &config.SiteConfig{}
+	site.Middleware.PgSQL.Database = "wpg"
+	if n, src := fixedTargetDB(DriverPgSQL, "", site); n != "wpg" || src != "site.yaml" {
+		t.Fatalf("site db → %q (%s)", n, src)
+	}
+}
+
+func TestResolveTargetDB_SQLWins(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "wpg_waterwork_quartz_pg.sql")
+	if err := os.WriteFile(p, []byte("\\c other_db\nCREATE TABLE t(id int);\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	name, _ := resolveTargetDB(DriverPgSQL, "", &config.SiteConfig{}, []string{p}, func(string) {})
+	if name != "other_db" {
+		t.Fatalf("got %q", name)
+	}
+}

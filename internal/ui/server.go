@@ -19,7 +19,6 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/wpg/wpgctl/internal/config"
 	"github.com/wpg/wpgctl/internal/deploy"
-	"github.com/wpg/wpgctl/internal/docker"
 	"github.com/wpg/wpgctl/internal/initenv"
 	"github.com/wpg/wpgctl/internal/precheck"
 	"github.com/wpg/wpgctl/internal/state"
@@ -97,13 +96,28 @@ func Start(ctx context.Context, opts Options) error {
 	}
 }
 
+// APIAlias 控制台 API 的带产品名前缀。现场 Nginx 常与业务前端共用 8877，
+// 根级 /api 太通用容易与其他服务撞路径，反代只需转发 /wpg-deploy-api/ 与 /wpg-deploy-assets/。
+// 直连 9527 时 /api/ 与 /wpg-deploy-api/ 等价。
+const APIAlias = "/wpg-deploy-api"
+
 func (s *Server) routes() {
+	s.mux.HandleFunc(APIAlias+"/", func(w http.ResponseWriter, r *http.Request) {
+		r2 := r.Clone(r.Context())
+		r2.URL.Path = "/api" + strings.TrimPrefix(r.URL.Path, APIAlias)
+		if r2.URL.RawPath != "" {
+			r2.URL.RawPath = "/api" + strings.TrimPrefix(r.URL.RawPath, APIAlias)
+		}
+		s.mux.ServeHTTP(w, r2)
+	})
 	s.mux.HandleFunc("/api/health", s.handleHealth)
+	s.mux.HandleFunc("/api/docker/nodes", s.handleDockerNodes)
 	s.mux.HandleFunc("/api/hostinfo", s.handleHostInfo)
 	s.mux.HandleFunc("/api/settings", s.handleSettings)
 	s.mux.HandleFunc("/api/site", s.handleSite)
 	s.mux.HandleFunc("/api/site/form", s.handleSiteForm)
 	s.mux.HandleFunc("/api/fs", s.handleFS)
+	s.mux.HandleFunc("/api/fs/exists", s.handleFSExists)
 	s.mux.HandleFunc("/api/fs/text", s.handleFSText)
 	s.mux.HandleFunc("/api/fs/expand", s.handleFSExpand)
 	s.mux.HandleFunc("/api/packages", s.handlePackages)
@@ -121,10 +135,13 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/module/deploy", s.handleModuleDeploy)
 	s.mux.HandleFunc("/api/module/patch-env", s.handleModulePatchEnv)
 	s.mux.HandleFunc("/api/nginx/patch", s.handleNginxPatch)
+	s.mux.HandleFunc("/api/nginx/status", s.handleNginxStatus)
 	s.mux.HandleFunc("/api/nacos/import", s.handleNacosImport)
 	s.mux.HandleFunc("/api/db/apply", s.handleDBApply)
+	s.mux.HandleFunc("/api/firewall/status", s.handleFirewallStatus)
 	s.mux.HandleFunc("/api/firewall/ports", s.handleFirewallPorts)
 	s.mux.HandleFunc("/api/firewall/start", s.handleFirewallStart)
+	s.mux.HandleFunc("/api/firewall/reload", s.handleFirewallReload)
 	s.mux.HandleFunc("/api/verify", s.handleVerify)
 	s.mux.HandleFunc("/api/preview", s.handlePreview)
 	s.mux.HandleFunc("/api/upgrade", s.handleUpgrade)
@@ -209,8 +226,6 @@ middleware:
 paths:
   workspace: /workspace
   nginxHtml: /workspace/middleware/nginx/html
-  waterwork: /workspace/sz-waterwork
-  intelligentModel: /workspace/wpg-intelligent-model-4.1.2
 `
 		s.writeJSON(w, 200, map[string]any{
 			"path":    s.opts.SitePath,
@@ -294,7 +309,7 @@ func (s *Server) handleFS(w http.ResponseWriter, r *http.Request) {
 	if mode == "" {
 		mode = "dir"
 	}
-	res, err := listFS(path, mode)
+	res, err := listFS(path, mode, r.URL.Query().Get("target"))
 	if err != nil {
 		s.writeJSON(w, 400, map[string]string{"error": err.Error()})
 		return
@@ -381,7 +396,7 @@ func (s *Server) handleInit(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if len(site.Nodes) > 1 && !body.Local {
-			s.appendLog(job, fmt.Sprintf("多机模式：本机 init 后将 SSH 分发到 %d 台从机（上传 Docker 离线包并安装、建目录、防火墙）", len(site.Nodes)-1))
+			s.appendLog(job, fmt.Sprintf("多机模式：本机 init 后将 SSH 分发到 %d 台从机（上传 Docker 离线包并安装、建目录、启动防火墙并放行 SSH 22 与控制台 9527）", len(site.Nodes)-1))
 		}
 		var mf *config.Manifest
 		if body.Manifest != "" {
@@ -392,7 +407,8 @@ func (s *Server) handleInit(w http.ResponseWriter, r *http.Request) {
 			BasePackage: body.Base, DockerPackage: body.DockerPackage,
 			LocalOnly: body.Local, SitePath: s.opts.SitePath,
 			SSHPassword: body.SSHPassword, SSHKeyPath: body.SSHKeyPath,
-			Log: func(line string) { s.appendLog(job, line) },
+			UIListen: s.opts.Listen,
+			Log:      func(line string) { s.appendLog(job, line) },
 		})
 		if err != nil {
 			job.Result = res
@@ -616,16 +632,41 @@ func (s *Server) handleJob(w http.ResponseWriter, r *http.Request) {
 	id := stringsTrim(r.URL.Path[len("/api/jobs/"):])
 	s.mu.Lock()
 	job := s.jobs[id]
-	s.mu.Unlock()
 	if job == nil {
+		s.mu.Unlock()
 		s.writeJSON(w, 404, map[string]string{"error": "job not found"})
 		return
 	}
-	s.writeJSON(w, 200, job)
+	snap := snapshotJob(job)
+	s.mu.Unlock()
+	s.writeJSON(w, 200, snap)
+}
+
+// snapshotJob 拷贝任务快照，避免轮询编码时和进度写并发打架。
+func snapshotJob(j *Job) Job {
+	out := *j
+	if j.Logs != nil {
+		out.Logs = append([]string(nil), j.Logs...)
+	}
+	if st, ok := j.Result.(*expandJobState); ok && st != nil {
+		cp := *st
+		if st.Steps != nil {
+			cp.Steps = append([]string(nil), st.Steps...)
+		}
+		if st.TarFiles != nil {
+			cp.TarFiles = append([]string(nil), st.TarFiles...)
+		}
+		if st.TarGzFiles != nil {
+			cp.TarGzFiles = append([]string(nil), st.TarGzFiles...)
+		}
+		out.Result = cp
+	}
+	return out
 }
 
 func (s *Server) handleWSLogs(w http.ResponseWriter, r *http.Request) {
-	svc := r.URL.Query().Get("service")
+	svc := strings.TrimSpace(r.URL.Query().Get("service"))
+	nodeIP := strings.TrimSpace(r.URL.Query().Get("node"))
 	if svc == "" {
 		http.Error(w, "service required", 400)
 		return
@@ -635,21 +676,75 @@ func (s *Server) handleWSLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer conn.Close()
-	d := dockerx.New()
-	ticker := time.NewTicker(2 * time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ticker.C:
-			out, err := d.Logs(svc, 80, false)
-			if err != nil {
-				_ = conn.WriteJSON(map[string]string{"error": err.Error()})
-				return
-			}
-			if err := conn.WriteJSON(map[string]string{"logs": out}); err != nil {
+
+	opts := status.LogsOptions{Service: svc, NodeIP: nodeIP, Tail: 200}
+	if loaded, lerr := config.LoadSite(s.opts.SitePath); lerr == nil {
+		opts.Site = loaded
+	}
+	if nodeIP != "" && !util.IsLocalIP(nodeIP) {
+		_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		_, msg, rerr := conn.ReadMessage()
+		_ = conn.SetReadDeadline(time.Time{})
+		if rerr != nil {
+			_ = conn.WriteJSON(map[string]string{"error": "未收到 SSH 凭据，无法拉取从机日志"})
+			return
+		}
+		var creds struct {
+			SSHPassword string `json:"sshPassword"`
+			SSHKeyPath  string `json:"sshKeyPath"`
+		}
+		_ = json.Unmarshal(msg, &creds)
+		opts.SSHPassword = creds.SSHPassword
+		opts.SSHKeyPath = creds.SSHKeyPath
+	}
+
+	puller, err := status.NewLogPuller(opts)
+	if err != nil {
+		_ = conn.WriteJSON(map[string]string{"error": err.Error()})
+		return
+	}
+	defer puller.Close()
+
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+	go func() {
+		for {
+			if _, _, rerr := conn.ReadMessage(); rerr != nil {
+				cancel()
 				return
 			}
 		}
+	}()
+
+	var writeMu sync.Mutex
+	writeJSON := func(v any) error {
+		writeMu.Lock()
+		defer writeMu.Unlock()
+		_ = conn.SetWriteDeadline(time.Now().Add(15 * time.Second))
+		return conn.WriteJSON(v)
+	}
+	go func() {
+		t := time.NewTicker(20 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				writeMu.Lock()
+				_ = conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(5*time.Second))
+				writeMu.Unlock()
+			}
+		}
+	}()
+
+	ferr := puller.Follow(ctx, func(line string) {
+		if writeJSON(map[string]any{"logs": line, "append": true}) != nil {
+			cancel()
+		}
+	})
+	if ferr != nil && ctx.Err() == nil {
+		_ = writeJSON(map[string]string{"error": ferr.Error()})
 	}
 }
 

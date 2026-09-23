@@ -1,11 +1,26 @@
 ﻿<script>
-/** 本机路径选择器：目录、YAML、nacos*.zip、.sql 多选。 */
+/**
+ * 本机路径选择器：目录、YAML、nacos*.zip、.sql 多选。
+ * 选目录时同时展示文件夹下的文件，并按目标给出「可以选这一层 / 再进一层 / 选深了」。
+ * 解压走「解压当前目录」或条目上的「解压此包」，并显示进度。
+ */
+import { nextTick, ref, watch } from 'vue'
 import { useConsole } from '@/composables/useConsole.js'
 
 export default {
   name: 'PathPickerDialog',
   setup() {
-    return useConsole()
+    const ctx = useConsole()
+    const expandLogEl = ref(null)
+    watch(
+      () => ctx.picker.expandLogs.length,
+      async () => {
+        await nextTick()
+        const el = expandLogEl.value
+        if (el) el.scrollTop = el.scrollHeight
+      },
+    )
+    return { ...ctx, expandLogEl }
   },
 }
 </script>
@@ -13,61 +28,130 @@ export default {
 <template>
     <el-dialog
       v-model="picker.open"
-      :title="picker.mode === 'yaml' ? '选择 YAML 文件' : picker.mode === 'nacos-zip' ? '选择 nacos*.zip（可多选）' : picker.mode === 'sql' ? '选择 .sql 文件（可多选）' : '选择目录'"
-      width="640px"
-      class="picker-dialog"
+      :title="picker.mode === 'yaml' ? '选择 YAML 文件' : picker.mode === 'nacos-zip' ? '选择 nacos*.zip（可多选）' : picker.mode === 'sql' ? '选择 .sql 文件（可多选）' : (picker.hint && picker.hint.title ? '选择' + picker.hint.title : '选择目录')"
+      width="720px"
+      :class="['picker-dialog', { 'is-expanding': picker.expanding || picker.expandLogs.length }]"
+      :close-on-click-modal="!picker.expanding"
+      :close-on-press-escape="!picker.expanding"
     >
-      <p class="muted" style="margin:0 0 0.75rem">{{ picker.current || '选择盘符 / 根目录' }}</p>
+      <p class="picker-current">
+        <span class="muted">当前目录</span>
+        <code>{{ picker.current || '选择盘符 / 根目录' }}</code>
+      </p>
       <div class="modal-toolbar" style="padding:0 0 0.75rem;border:0">
-        <el-button type="primary" plain size="small" @click="browseFS(picker.parent)" :disabled="!picker.parent && picker.current">上级</el-button>
-        <el-button type="primary" plain size="small" @click="browseFS('')">根 / 盘符</el-button>
+        <el-button type="primary" plain size="small" @click="browseFS(picker.parent)" :disabled="picker.expanding || (!picker.parent && picker.current)">上级</el-button>
+        <el-button type="primary" plain size="small" @click="browseFS('')" :disabled="picker.expanding">根 / 盘符</el-button>
+        <el-button type="primary" plain size="small" @click="browseFS(picker.current)" :disabled="picker.expanding">
+          <el-icon style="margin-right:0.25em"><Refresh /></el-icon>刷新
+        </el-button>
         <el-button
           type="warning"
           plain
           size="small"
           v-if="picker.mode === 'dir' && picker.current"
           :loading="picker.expanding"
+          :disabled="picker.expanding"
           @click="expandPickerDir"
-        >{{ picker.expanding ? '解压中…' : '解压 ZIP / 展开 TAR' }}</el-button>
+        >{{ picker.expanding ? '解压中…' : '解压当前目录' }}</el-button>
         <el-button
           type="primary"
           size="small"
           v-if="picker.mode === 'dir' && picker.current"
+          :class="{ 'is-ready-pick': picker.hint && picker.hint.level === 'ready' }"
+          :disabled="picker.expanding"
           @click="confirmPicker(picker.current)"
-        >选择当前目录</el-button>
+        >{{ picker.hint && picker.hint.level === 'ready' ? '就选这一层' : '选择当前目录' }}</el-button>
         <el-button
           type="primary"
           size="small"
           v-if="picker.mode === 'nacos-zip' || picker.mode === 'sql'"
-          :disabled="!picker.selected.length"
+          :disabled="!picker.selected.length || picker.expanding"
           @click="picker.mode === 'sql' ? confirmSqlPicker() : confirmNacosZipPicker()"
         >确认已选 {{ picker.selected.length }} 个</el-button>
       </div>
+      <el-alert
+        v-if="picker.mode === 'dir' && picker.hint && picker.hint.message"
+        class="picker-level-hint"
+        :type="pickerHintType(picker.hint.level)"
+        :closable="false"
+        :title="picker.hint.headline || '怎么判断选对了'"
+        :description="picker.hint.message"
+        show-icon
+      />
       <p v-if="picker.mode === 'dir'" class="muted" style="font-size:0.85rem">
-        目录内若有 <code>.zip</code> / <code>.tar.zip</code>，可先点「解压 ZIP / 展开 TAR」；含 <code>[manifest]</code> 用于部署，含 <code>[docker]</code> 用于 Docker 离线安装。
+        点文件夹进入。橙色「进这一层」还要再点进去；青绿「到层标志」说明已经到了。
       </p>
       <p v-else-if="picker.mode === 'nacos-zip'" class="muted" style="font-size:0.85rem">
-        仅显示文件名以 <code>nacos</code> 开头的 <code>.zip</code>；点击勾选，可多选后确认。导入时直接上传到 Nacos，不解压。
+        勾选 nacos*.zip，导入时不解压。
       </p>
       <p v-else-if="picker.mode === 'sql'" class="muted" style="font-size:0.85rem">
-        仅显示 <code>.sql</code>；点击勾选，可多选后按选择顺序执行。文件在本机 Linux 磁盘上。
+        勾选 .sql，按选择顺序执行。
       </p>
-      <div class="fs-list">
+      <div v-if="picker.expanding || picker.expandLogs.length" class="picker-expand-progress" :class="{ live: picker.expanding }">
+        <div class="picker-expand-head">
+          <p class="picker-expand-status">{{ picker.expandStatus }}</p>
+          <strong class="picker-expand-pct">{{ picker.expandPercent }}%</strong>
+        </div>
+        <p v-if="picker.expandPackTotal > 1" class="picker-expand-label">总体</p>
+        <el-progress
+          :percentage="picker.expandPercent"
+          :status="picker.expanding ? undefined : (picker.error ? 'exception' : 'success')"
+          :stroke-width="16"
+          striped
+          :striped-flow="picker.expanding"
+          :color="picker.expanding ? '#12b5a2' : undefined"
+        />
+        <template v-if="picker.expandPackTotal > 1">
+          <div class="picker-expand-pack-head">
+            <p class="picker-expand-label">当前包 {{ picker.expandPackPercent }}%</p>
+          </div>
+          <el-progress
+            :percentage="picker.expandPackPercent"
+            :stroke-width="10"
+            striped
+            :striped-flow="picker.expanding"
+            color="#1ad4be"
+          />
+        </template>
+        <p v-if="picker.expandDetail" class="picker-expand-detail">{{ picker.expandDetail }}</p>
+        <pre ref="expandLogEl" class="log-box picker-expand-log">{{ picker.expandLogs.join('\n') }}</pre>
+      </div>
+      <div class="fs-list" :class="{ disabled: picker.expanding }">
         <button
           v-for="e in picker.entries"
           :key="e.path"
           type="button"
           class="fs-item"
-          :class="{ selected: (picker.mode === 'nacos-zip' || picker.mode === 'sql') && !e.isDir && isPickerSelected(e.path) }"
+          :class="{
+            selected: (picker.mode === 'nacos-zip' || picker.mode === 'sql') && !e.isDir && isPickerSelected(e.path),
+            archive: e.isArchive,
+            file: picker.mode === 'dir' && !e.isDir && !e.isArchive,
+            'hint-enter': isHintEnter(e),
+            'hint-mark': isHintMark(e),
+          }"
+          :disabled="picker.expanding"
           @click="onFsClick(e)"
           @dblclick="onFsDblClick(e)"
         >
-          <el-icon class="fs-icon"><Folder v-if="e.isDir" /><Document v-else /></el-icon>
-          <span>{{ e.name }}</span>
+          <el-icon class="fs-icon"><Folder v-if="e.isDir" /><Files v-else-if="e.isArchive" /><Document v-else /></el-icon>
+          <span class="fs-name">{{ e.name }}</span>
+          <span v-if="e.isArchive" class="fs-kind">{{ e.alreadyExpanded ? '已展开' : (e.archiveKind || 'zip') }}</span>
+          <span v-else-if="isHintEnter(e)" class="fs-kind enter">进这一层</span>
+          <span v-else-if="isHintMark(e)" class="fs-kind mark">到层标志</span>
+          <span v-else-if="picker.mode === 'dir' && !e.isDir" class="fs-kind">文件</span>
+          <el-button
+            v-if="picker.mode === 'dir' && canExpandArchive(e)"
+            type="warning"
+            plain
+            size="small"
+            :disabled="picker.expanding"
+            @click.stop="expandPickerArchive(e)"
+          >解压此包</el-button>
           <el-icon v-if="(picker.mode === 'nacos-zip' || picker.mode === 'sql') && !e.isDir && isPickerSelected(e.path)"><Check /></el-icon>
         </button>
         <el-empty v-if="!(picker.entries && picker.entries.length)" description="空目录或无可选文件" :image-size="72" />
       </div>
+      <el-alert v-if="picker.expandHint && !picker.expanding" type="info" :closable="false" :title="picker.expandHint" style="margin-top:0.5rem" />
       <el-alert v-if="picker.expandMsg" type="success" :closable="false" :title="picker.expandMsg" style="margin-top:0.5rem" />
       <el-alert v-if="picker.error" type="error" :closable="false" :title="picker.error" style="margin-top:0.5rem" />
     </el-dialog>

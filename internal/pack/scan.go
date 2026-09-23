@@ -23,23 +23,23 @@ type ScanOptions struct {
 
 // ScannedImage 扫描到的镜像条目。
 type ScannedImage struct {
-	Name     string `json:"name"`
-	Image    string `json:"image"`
-	Version  string `json:"version"`
-	Layer    int    `json:"layer"`
-	Port     int    `json:"port,omitempty"`
-	Profile  string `json:"profile,omitempty"`
-	Health   string `json:"health"` // tcp|http|none
-	TarPath  string `json:"tarPath"`
+	Name      string `json:"name"`
+	Image     string `json:"image"`
+	Version   string `json:"version"`
+	Layer     int    `json:"layer"`
+	Port      int    `json:"port,omitempty"`
+	Profile   string `json:"profile,omitempty"`
+	Health    string `json:"health"` // tcp|http|none
+	TarPath   string `json:"tarPath"`
 	ParentDir string `json:"parentDir,omitempty"`
 }
 
 // ScanResult 扫描结果。
 type ScanResult struct {
-	Images   []ScannedImage `json:"images"`
+	Images   []ScannedImage   `json:"images"`
 	Manifest *config.Manifest `json:"-"`
-	YAML     string         `json:"yaml"`
-	Warnings []string       `json:"warnings,omitempty"`
+	YAML     string           `json:"yaml"`
+	Warnings []string         `json:"warnings,omitempty"`
 }
 
 type serviceHint struct {
@@ -52,26 +52,26 @@ type serviceHint struct {
 
 // 已知组件默认分层 / 端口（与附录 A 中间件对齐）。
 var knownHints = map[string]serviceHint{
-	"mysql":          {Layer: 1, Port: 3306, Health: "tcp"},
-	"pgsql":          {Layer: 1, Port: 5433, Health: "tcp"},
-	"postgresql":     {Layer: 1, Port: 5433, Health: "tcp"},
-	"postgis":        {Layer: 1, Port: 5432, Health: "tcp", Profile: "gis"},
-	"mongodb":        {Layer: 1, Port: 27017, Health: "tcp", Profile: "gis"},
-	"redis":          {Layer: 1, Port: 6377, Health: "tcp"},
-	"kafka":          {Layer: 1, Port: 9092, Health: "tcp"},
-	"zookeeper":      {Layer: 1, Port: 2181, Health: "tcp"},
-	"nacos":          {Layer: 1, Port: 8848, Health: "http"},
-	"nacos-server":   {Layer: 1, Port: 8848, Health: "http", Image: "nacos/nacos-server"},
-	"minio":          {Layer: 1, Port: 9000, Health: "tcp"},
-	"influxdb":       {Layer: 1, Port: 8086, Health: "tcp"},
-	"emqx":           {Layer: 1, Port: 1883, Health: "tcp"},
-	"nginx":          {Layer: 4, Port: 8877, Health: "http"},
-	"kafdrop":        {Layer: 2, Port: 9001, Health: "http"},
-	"waterjob":       {Layer: 2, Port: 8088, Health: "http"},
-	"water-job-biz":  {Layer: 2, Port: 8088, Health: "http", Image: "water-job-biz"},
-	"prometheus":     {Layer: 4, Port: 29090, Health: "http", Profile: "monitor"},
-	"grafana":        {Layer: 4, Port: 3000, Health: "http", Profile: "monitor"},
-	"node-exporter":  {Layer: 4, Port: 9100, Health: "tcp", Profile: "monitor"},
+	"mysql":         {Layer: 1, Port: 3306, Health: "tcp"},
+	"pgsql":         {Layer: 1, Port: 5433, Health: "tcp"},
+	"postgresql":    {Layer: 1, Port: 5433, Health: "tcp"},
+	"postgis":       {Layer: 1, Port: 5432, Health: "tcp", Profile: "gis"},
+	"mongodb":       {Layer: 1, Port: 27017, Health: "tcp", Profile: "gis"},
+	"redis":         {Layer: 1, Port: 6377, Health: "tcp"},
+	"kafka":         {Layer: 1, Port: 9092, Health: "tcp"},
+	"zookeeper":     {Layer: 1, Port: 2181, Health: "tcp"},
+	"nacos":         {Layer: 1, Port: 8848, Health: "http"},
+	"nacos-server":  {Layer: 1, Port: 8848, Health: "http", Image: "nacos/nacos-server"},
+	"minio":         {Layer: 1, Port: 9000, Health: "tcp"},
+	"influxdb":      {Layer: 1, Port: 8086, Health: "tcp"},
+	"emqx":          {Layer: 1, Port: 1883, Health: "tcp"},
+	"nginx":         {Layer: 4, Port: 8877, Health: "http"},
+	"kafdrop":       {Layer: 2, Port: 9001, Health: "http"},
+	"waterjob":      {Layer: 2, Port: 11005, Health: "http"},
+	"water-job-biz": {Layer: 2, Port: 11005, Health: "http", Image: "water-job-biz"},
+	"prometheus":    {Layer: 4, Port: 29090, Health: "http", Profile: "monitor"},
+	"grafana":       {Layer: 4, Port: 3000, Health: "http", Profile: "monitor"},
+	"node-exporter": {Layer: 4, Port: 9100, Health: "tcp", Profile: "monitor"},
 }
 
 var (
@@ -81,7 +81,7 @@ var (
 	// name.version
 	reDotVer = regexp.MustCompile(`(?i)^([a-z][a-z0-9_-]*)\.(v?\d[\w.-]*)$`)
 	// mysql5.7.44 / redis6.0
-	reGlued = regexp.MustCompile(`(?i)^([a-z]+)(\d[\w.-]*)$`)
+	reGlued   = regexp.MustCompile(`(?i)^([a-z]+)(\d[\w.-]*)$`)
 	reVerLike = regexp.MustCompile(`(?i)^v?\d`)
 )
 
@@ -231,12 +231,12 @@ func ScanDir(opts ScanOptions) (*ScanResult, error) {
 			}
 		}
 		mf.Services = append(mf.Services, config.ServiceSpec{
-			Name:    img.Name,
-			Image:   img.Image,
-			Profile: img.Profile,
-			Layer:   img.Layer,
-			Port:    img.Port,
-			Health:  hs,
+			Name:          img.Name,
+			Image:         img.Image,
+			Profile:       img.Profile,
+			Layer:         img.Layer,
+			Port:          img.Port,
+			Health:        hs,
 			RequiredFiles: []string{relTar(abs, img.TarPath)},
 		})
 	}
@@ -304,7 +304,7 @@ func normalizeServiceName(name string) string {
 		return "nacos"
 	case "postgresql":
 		return "pgsql"
-	case "water-job-biz":
+	case "water-job-biz", "water-job":
 		return "waterjob"
 	default:
 		return n

@@ -51,6 +51,40 @@ services:
 	}
 }
 
+// 平台 / GIS 等模块的 compose 不能被改：即便 environment 里写着 WPG_PGSQL_HOST 之类，也只动 .env。
+func TestPatchComposeEnvForSite_LeavesPlatformComposeAlone(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "giscenter")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	compose := filepath.Join(dir, "docker-compose.yml")
+	content := `services:
+  giscenter:
+    environment:
+      - WPG_PGSQL_HOST=10.10.15.107
+      - WPG_PGSQL_DBNAME=gis_center
+      - MYSQL_HOST=10.10.15.107
+`
+	if err := os.WriteFile(compose, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	site := &config.SiteConfig{
+		Nodes:      []config.Node{{Name: "app", IP: "10.10.102.71", Services: []string{"kafka", "postgis"}}},
+		Middleware: config.MiddlewareConfig{Kafka: config.KafkaConn{Host: "10.10.102.71", Port: 9092}},
+	}
+	changed, err := PatchComposeEnvForSite(dir, site)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(changed) != 0 {
+		t.Fatalf("platform compose must not change, got %v", changed)
+	}
+	out, _ := os.ReadFile(compose)
+	if string(out) != content {
+		t.Fatalf("compose content altered:\n%s", out)
+	}
+}
+
 func TestKafkaAdvertiseHostFromServices(t *testing.T) {
 	site := &config.SiteConfig{
 		Nodes: []config.Node{

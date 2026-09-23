@@ -63,7 +63,7 @@ func newInitCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "init",
 		Short: "环境初始化（幂等）",
-		Long:  "安装 Docker 静态二进制、创建目录、防火墙放行、调整内核参数。可重复执行。",
+		Long:  "安装 Docker、创建目录、检查并启动防火墙（放行 SSH 22 与控制台 9527）、调整内核参数。业务端口在部署各服务时再放行。可重复执行。",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			site, err := config.LoadSite(flagSitePath)
 			if err != nil {

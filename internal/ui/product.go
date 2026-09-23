@@ -25,6 +25,10 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 			s.writeJSON(w, 500, map[string]string{"error": err.Error()})
 			return
 		}
+		if pruned := pruneMissingFieldPaths(st.FieldPaths); pruned != nil {
+			st.FieldPaths = pruned
+			_ = state.SaveSettings(st)
+		}
 		s.writeJSON(w, 200, st)
 	case http.MethodPut, http.MethodPost:
 		var body state.UISettings
@@ -84,6 +88,57 @@ func normalizePreflight(p *state.PreflightSettings) {
 	default:
 		p.PackageSync = "auto"
 	}
+}
+
+// pruneMissingFieldPaths 去掉磁盘上已经不存在的本机路径；IP 类字段原样保留。
+// 有删减时返回新 map，无需改动时返回 nil。
+func pruneMissingFieldPaths(fp map[string]string) map[string]string {
+	if len(fp) == 0 {
+		return nil
+	}
+	skip := map[string]struct{}{
+		"gatewayIP": {}, "appIP": {}, "graphIP": {}, "deployTopology": {},
+	}
+	out := make(map[string]string, len(fp))
+	changed := false
+	for k, v := range fp {
+		v = strings.TrimSpace(v)
+		if v == "" {
+			changed = true
+			continue
+		}
+		if _, ok := skip[k]; ok {
+			out[k] = v
+			continue
+		}
+		if k == "nacosConfigZips" {
+			var keep []string
+			for _, line := range strings.Split(v, "\n") {
+				line = strings.TrimSpace(line)
+				if line == "" {
+					continue
+				}
+				if _, err := os.Stat(line); err == nil {
+					keep = append(keep, line)
+				} else {
+					changed = true
+				}
+			}
+			if len(keep) > 0 {
+				out[k] = strings.Join(keep, "\n")
+			}
+			continue
+		}
+		if _, err := os.Stat(v); err == nil {
+			out[k] = v
+			continue
+		}
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	return out
 }
 
 // PackageInfo 本地包仓库条目。

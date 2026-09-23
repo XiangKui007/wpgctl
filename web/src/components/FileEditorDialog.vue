@@ -30,6 +30,11 @@ export default {
       if (name.endsWith('.conf')) return '编辑 Nginx 配置'
       return '编辑 ' + name
     })
+    /** 候选按钮只显示「父目录/文件名」，如 giscenter/.env。 */
+    function candidateLabel(p) {
+      const parts = String(p || '').replace(/\\/g, '/').split('/').filter(Boolean)
+      return parts.slice(-2).join('/')
+    }
     function onOpened() {
       editorReady.value = true
     }
@@ -43,6 +48,7 @@ export default {
       fileName,
       title,
       editorReady,
+      candidateLabel,
       onOpened,
       onClosed,
     }
@@ -66,6 +72,15 @@ export default {
     <p class="file-editor-path muted">
       <code>{{ fileEditor.path }}</code>
     </p>
+    <!-- GIS 等模块下有多份同名 .env（giscenter / gisdefault），在这里切换，各自单独保存 -->
+    <div v-if="fileEditor.candidates.length > 1" class="file-editor-candidates">
+      <span class="muted">该模块有 {{ fileEditor.candidates.length }} 份同名文件：</span>
+      <el-radio-group :model-value="fileEditor.path" size="small" @change="switchFileCandidate">
+        <el-radio-button v-for="c in fileEditor.candidates" :key="c" :value="c" :title="c">
+          {{ candidateLabel(c) }}
+        </el-radio-button>
+      </el-radio-group>
+    </div>
     <div v-loading="fileEditor.loading" class="file-editor-body">
       <CodeEditor
         v-if="editorReady"

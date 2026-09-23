@@ -16,6 +16,25 @@ export function joinPath(root, name) {
 }
 
 /**
+ * formatBytes 把字节数写成 KB/MB/GB，给解压进度条用。
+ * @param {number} n 字节数
+ * @returns {string}
+ */
+export function formatBytes(n) {
+  const v = Number(n)
+  if (!Number.isFinite(v) || v < 0) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  let x = v
+  let i = 0
+  while (x >= 1024 && i < units.length - 1) {
+    x /= 1024
+    i++
+  }
+  const digits = i === 0 ? 0 : x >= 10 ? 1 : 2
+  return `${x.toFixed(digits)} ${units[i]}`
+}
+
+/**
  * zipBaseName 取路径最后一段，用于 zip 摘要展示。
  * @param {string} p 绝对路径
  * @returns {string}
@@ -27,17 +46,55 @@ export function zipBaseName(p) {
 }
 
 /**
- * inferWorkspaceFromMiddleware 从 middleware 根推工作簿根。
- * 兼容双层 …/middleware/middleware；对不上则回落 fallback。
- * @param {string} root middleware 根目录
- * @param {string} fallback 默认工作簿路径
+ * pathBaseName 取路径最后一段（去掉末尾分隔符）。
+ * @param {string} p 目录或文件路径
  * @returns {string}
  */
-export function inferWorkspaceFromMiddleware(root, fallback) {
-  const norm = String(root || '').replace(/[/\\]+$/, '')
-  const stripped = norm.replace(/[/\\](middleware|middle)([/\\](middleware|middle))?$/i, '')
-  if (stripped && stripped !== norm) return stripped
-  return fallback
+function pathBaseName(p) {
+  const parts = String(p || '')
+    .replace(/[/\\]+$/, '')
+    .split(/[/\\]/)
+    .filter(Boolean)
+  return parts[parts.length - 1] || ''
+}
+
+/**
+ * isWorkbookRoot 判断路径是否已经是名为 workspace 的工作簿根。
+ * @param {string} p 目录路径
+ * @returns {boolean}
+ */
+export function isWorkbookRoot(p) {
+  return pathBaseName(p).toLowerCase() === 'workspace'
+}
+
+/**
+ * resolveWorkbookFromParent 把「开始前」所选父目录解析成工作簿根。
+ * 选 `/` → `/workspace`；路径中已有 workspace 祖先则用那一层，避免把交付包目录当工作簿。
+ * 相对路径（只填了包名）回落 fallback。
+ * @param {string} parent 用户选择或填写的父目录
+ * @param {string} fallback 空输入或相对包名时的工作簿路径
+ * @returns {string}
+ */
+export function resolveWorkbookFromParent(parent, fallback) {
+  const raw = String(parent || '').trim()
+  if (!raw) return fallback
+  const sep = raw.includes('\\') ? '\\' : '/'
+  const isAbs = raw.startsWith('/') || /^[A-Za-z]:/.test(raw)
+  if (!isAbs) return fallback
+  const norm = raw.replace(/[/\\]+$/, '')
+  if (!norm || /^[A-Za-z]:$/.test(norm)) {
+    return (norm ? norm + sep : sep) + 'workspace'
+  }
+  const parts = norm.split(/[/\\]/).filter(Boolean)
+  const idx = parts.findIndex((p) => String(p).toLowerCase() === 'workspace')
+  if (idx >= 0) {
+    if (raw.startsWith('/')) return '/' + parts.slice(0, idx + 1).join('/')
+    const drive = /^[A-Za-z]:$/.test(parts[0]) ? parts[0] : ''
+    const rest = drive ? parts.slice(1, idx + 1) : parts.slice(0, idx + 1)
+    return drive ? drive + sep + rest.join(sep) : rest.join(sep)
+  }
+  if (pathBaseName(norm).toLowerCase() === 'workspace') return norm
+  return norm + sep + 'workspace'
 }
 
 /**
@@ -51,13 +108,28 @@ export function isEditableConfigFile(path) {
 }
 
 /**
+ * stripAnsi 去掉 docker logs 里的终端颜色码，避免日志页出现看不见的 ESC 只剩 [33m。
+ * @param {string} s 原始日志
+ * @returns {string} 纯文本
+ */
+export function stripAnsi(s) {
+  return String(s || '')
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '')
+    .replace(/\x1b\[[0-9;:=?]*[A-Za-z]?/g, '')
+    .replace(/\x1b[()][0-9A-B]/g, '')
+    .replace(/\[[0-9]{1,3}(?:;[0-9]{1,3}){0,6}m/g, '')
+}
+
+/**
  * logClass 按日志行内容返回样式类名。
  * @param {string} line 日志一行
  * @returns {string} err / ok / 空
  */
 export function logClass(line) {
-  if (String(line).includes('ERROR')) return 'err'
-  if (String(line).includes('完成') || String(line).includes('ok')) return 'ok'
+  const s = String(line)
+  if (s.includes('ERROR')) return 'err'
+  if (s.includes('WARN')) return 'warn'
+  if (s.includes('完成') || s.includes('成功') || s.includes('ok')) return 'ok'
   return ''
 }
 

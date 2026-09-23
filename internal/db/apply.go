@@ -38,10 +38,13 @@ type Script struct {
 	Database string
 }
 
-// Result 执行结果。
+// Result 执行结果。Database / Tables 是最后一个文件所在库；多库时看 Databases。
 type Result struct {
-	Applied []string
-	Skipped []string
+	Applied   []string    `json:"applied"`
+	Skipped   []string    `json:"skipped,omitempty"`
+	Database  string      `json:"database,omitempty"`
+	Tables    []string    `json:"tables,omitempty"`
+	Databases []DBSummary `json:"databases,omitempty"`
 }
 
 // Run 扫描包内 SQL 并按台账幂等执行。

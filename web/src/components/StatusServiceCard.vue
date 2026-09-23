@@ -1,7 +1,7 @@
 ﻿<script>
 /**
  * StatusServiceCard 状态页单条 Docker 服务卡片。
- * 字段在宽卡片里两栏排列，操作条固定在底部，便于分栏网格等高。
+ * 主控机 / 从机共用同一套字段（空值显示 —），避免 compose 与 docker ps 数据源导致行数对不齐。
  */
 import { useConsole } from '@/composables/useConsole.js'
 
@@ -65,44 +65,39 @@ export default {
           <dt title="创建时间">创建</dt>
           <dd>{{ svcCreated(service) }}</dd>
         </template>
-        <template v-if="svcProject(service) && svcProject(service) !== svcService(service) && svcProject(service) !== svcName(service)">
-          <dt title="Compose 项目">项目</dt>
-          <dd>{{ svcProject(service) }}</dd>
-        </template>
-        <template v-if="svcNetworks(service)">
-          <dt class="status-wide-label" title="Docker 网络">网络</dt>
-          <dd class="status-wide">{{ svcNetworks(service) }}</dd>
-        </template>
-        <template v-if="svcPortChips(service).visible.length">
-          <dt class="status-wide-label" title="端口映射">端口</dt>
-          <dd class="status-wide">
-            <div class="status-ports">
-              <span
-                v-for="p in svcPortChips(service).visible"
-                :key="p"
-                class="port-chip"
-                :title="svcPorts(service)"
-              >{{ p }}</span>
-              <span
-                v-if="svcPortChips(service).more"
-                class="port-chip more"
-                :title="svcPorts(service)"
-              >+{{ svcPortChips(service).more }}</span>
-            </div>
-          </dd>
-        </template>
-        <template v-else-if="svcPorts(service)">
-          <dt class="status-wide-label" title="端口映射">端口</dt>
-          <dd class="status-wide" :title="svcPorts(service)">内部端口</dd>
-        </template>
-        <template v-if="!settings.privacyMode && svcImage(service)">
+        <dt title="Compose 项目">项目</dt>
+        <dd>{{ svcProject(service) || '—' }}</dd>
+        <dt class="status-wide-label" title="Docker 网络">网络</dt>
+        <dd class="status-wide">{{ svcNetworks(service) || '—' }}</dd>
+        <dt class="status-wide-label" title="端口映射">端口</dt>
+        <dd class="status-wide">
+          <div v-if="svcPortChips(service).visible.length" class="status-ports">
+            <span
+              v-for="p in svcPortChips(service).visible"
+              :key="p"
+              class="port-chip"
+              :title="svcPorts(service)"
+            >{{ p }}</span>
+            <span
+              v-if="svcPortChips(service).more"
+              class="port-chip more"
+              :title="svcPorts(service)"
+            >+{{ svcPortChips(service).more }}</span>
+          </div>
+          <span
+            v-else-if="svcIsHostNetwork(service)"
+            class="muted"
+            title="host 网络与宿主机共用端口，docker ps 通常不列映射"
+          >host（与宿主机共用）</span>
+          <span v-else-if="svcPorts(service)" class="muted" :title="svcPorts(service)">内部端口</span>
+          <span v-else class="muted">—</span>
+        </dd>
+        <template v-if="!settings.privacyMode">
           <dt class="status-wide-label" title="镜像">镜像</dt>
-          <dd class="status-wide status-image" :title="svcImage(service)">{{ svcImage(service) }}</dd>
+          <dd class="status-wide status-image" :title="svcImage(service)">{{ svcImage(service) || '—' }}</dd>
         </template>
-        <template v-if="svcComposeDir(service)">
-          <dt class="status-wide-label" title="Compose 工作目录">目录</dt>
-          <dd class="status-wide status-image" :title="svcComposeDir(service)">{{ settings.privacyMode ? '******' : svcComposeDir(service) }}</dd>
-        </template>
+        <dt class="status-wide-label" title="Compose 工作目录">目录</dt>
+        <dd class="status-wide status-image" :title="svcComposeDir(service)">{{ settings.privacyMode && svcComposeDir(service) ? '******' : (svcComposeDir(service) || '—') }}</dd>
         <template v-if="svcExitCode(service) !== null">
           <dt title="退出码">退出</dt>
           <dd class="status-health bad">{{ svcExitCode(service) }}</dd>
@@ -130,19 +125,11 @@ export default {
         <el-button type="primary" plain size="small" :disabled="statusBusy" @click="runStatusAction('restart', service)">重启</el-button>
         <el-button type="danger" plain size="small" :disabled="statusBusy" @click="runStatusAction('down', service)">Down</el-button>
         <el-button
-          v-if="svcComposeDir(service)"
-          type="danger"
-          plain
-          size="small"
-          :disabled="statusBusy"
-          @click="runStatusAction('stack-down', service)"
-        >Down 栈</el-button>
-        <el-button
           type="info"
           plain
           size="small"
-          :disabled="statusBusy || !svcIsLocal(service)"
-          :title="svcIsLocal(service) ? '本机容器日志' : '从机日志请到该机查看'"
+          :disabled="statusBusy"
+          :title="svcIsLocal(service) ? '本机实时日志（docker logs -f）' : 'SSH 跟随该从机 docker logs -f'"
           @click="openLogsFor(service)"
         >日志</el-button>
       </el-button-group>

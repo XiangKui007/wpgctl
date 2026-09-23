@@ -28,9 +28,7 @@ export default {
               </div>
             </div>
           </div>
-          <div class="log-box" v-if="jobLogs.length">
-            <div v-for="(l, i) in jobLogs" :key="i" :class="logClass(l)">{{ l }}</div>
-          </div>
+          <JobLogBox :lines="jobLogs" :running="!!activeJobKey" />
           <div class="actions" v-if="precheckDone">
             <el-button type="primary" @click="goToStep(2)" :disabled="precheckBlocked || !precheckDone">进入初始化</el-button>
           </div>

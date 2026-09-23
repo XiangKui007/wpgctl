@@ -17,6 +17,7 @@ type NginxPatchOptions struct {
 	ProxyIPs       NginxProxyIPs
 	ComposeUp      bool
 	SkipProxyPatch bool // true：不改 conf 内 proxy_pass IP（由用户手工编辑保存）
+	Force          bool // true：忽略已在运行，强制再走一遍；默认已部署则跳过
 }
 
 // NginxPatchResult nginx 步骤执行摘要。
@@ -27,6 +28,8 @@ type NginxPatchResult struct {
 	ExpandHTML *fetch.ExpandResult `json:"expandHtml,omitempty"`
 	ProxyNotes []string            `json:"proxyNotes"`
 	Compose    *Result             `json:"compose,omitempty"`
+	Skipped    bool                `json:"skipped,omitempty"` // 已在运行，未再 load / up
+	Runtime    *NginxRuntime       `json:"runtime,omitempty"`
 }
 
 // RunNginxPatch 执行 nginx 模块完整现场流程。
@@ -47,6 +50,18 @@ func RunNginxPatch(opts NginxPatchOptions) (*NginxPatchResult, error) {
 		WebConf: opts.Layout.WebConf,
 		HTMLDir: opts.Layout.HTMLDir,
 		Steps:   []string{"nginx 模块目录: " + moduleDir},
+	}
+	if !opts.Force {
+		st := InspectNginxRuntime(moduleDir)
+		out.Runtime = &st
+		if st.Deployed {
+			out.Skipped = true
+			out.Steps = append(out.Steps, st.Summary+"，跳过解压 / load / compose up")
+			return out, nil
+		}
+		if st.Reason != "" {
+			out.Steps = append(out.Steps, "当前未视为已部署："+st.Reason)
+		}
 	}
 
 	var loadedRefs []string

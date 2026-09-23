@@ -133,15 +133,9 @@ func (s *Session) RunWpgctl(args []string, onLine func(string)) error {
 	return s.RunPrivileged(cmd, onLine)
 }
 
-// IncludeFrontendDir 判断模块目录是否应同步前端静态。仅目录名为 nginx 时为 true（中间件机 Nginx 步骤）。
-func IncludeFrontendDir(localDir string) bool {
-	p := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(localDir), "\\", "/"))
-	p = strings.Trim(p, "/")
-	return path.Base(p) == "nginx"
-}
-
-// SkipSyncRel 同步目录时跳过的相对路径：运行时 data/logs，以及非 Nginx 机上的前端静态。
-func SkipSyncRel(rel string, isDir, includeFrontend bool) bool {
+// SkipSyncRel 同步目录时跳过的相对路径：运行时 data/logs，以及前端静态 html/frontend/dist。
+// 前端包只在主控机由 Nginx 部署，SSH 分发一律不传。
+func SkipSyncRel(rel string, isDir bool) bool {
 	if !isDir {
 		return false
 	}
@@ -149,26 +143,17 @@ func SkipSyncRel(rel string, isDir, includeFrontend bool) bool {
 	if base == "data" || base == "logs" || base == "log" || base == ".git" {
 		return true
 	}
-	if includeFrontend {
-		return false
-	}
 	return base == "html" || base == "frontend" || base == "dist"
 }
 
-// SyncDir 将本机目录同步到远端 remoteDir（跳过 data/logs；已存在且大小一致的文件不重传）。
-// 前端静态（html/frontend/dist）默认不同步——只应随 Nginx 部署到中间件机。
+// SyncDir 将本机目录同步到远端 remoteDir（跳过 data/logs 与前端静态；已存在且大小一致的文件不重传）。
 func (s *Session) SyncDir(localDir, remoteDir string) error {
-	return s.SyncDirFilter(localDir, remoteDir, false)
-}
-
-// SyncDirFilter includeFrontend 为 true 时把 html/frontend/dist 一并上传（Nginx 模块）。
-func (s *Session) SyncDirFilter(localDir, remoteDir string, includeFrontend bool) error {
 	remoteDir = strings.TrimSpace(remoteDir)
 	if remoteDir == "" {
 		return fmt.Errorf("远端目录为空")
 	}
 	skip := func(rel string, isDir bool) bool {
-		return SkipSyncRel(rel, isDir, includeFrontend)
+		return SkipSyncRel(rel, isDir)
 	}
 	if s.IsRoot() {
 		s.Log(fmt.Sprintf("同步目录 %s → %s:%s", localDir, s.Node.IP, remoteDir))

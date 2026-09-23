@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -12,8 +13,10 @@ import (
 	"github.com/wpg/wpgctl/internal/util"
 )
 
-// EnvPatchHosts 按 site.yaml 回写 .env 中已有键。
+// EnvPatchHosts 按 site.yaml 回写 .env 中已有键（不新增键）。
 // 市政水厂 PgSQL 版未改 MYSQL_* 键名：MySQL 已跳过时，把 PgSQL 的 host/port/user/password 填进这些键。
+// MinIO / InfluxDB / EMQX / PostGIS / WaterJob 的 IP 来自节点 services 分配，不误用 Nacos 地址。
+// GIS 模块另见 putGISEnvKeys：回写 WPG_PGSQL_* / WPG_MONGODB_*（与业务 PgSQL 不是同一套账号）。
 func EnvPatchHosts(envPath string, site *config.SiteConfig) ([]string, error) {
 	if site == nil {
 		return nil, fmt.Errorf("site 不能为空")
@@ -22,6 +25,8 @@ func EnvPatchHosts(envPath string, site *config.SiteConfig) ([]string, error) {
 		return nil, fmt.Errorf(".env 不存在: %s", envPath)
 	}
 	repl := hostReplacements(site)
+	putGISEnvKeys(repl, site, envPath)
+	putWaterworkEnvKeys(repl, site, envPath)
 	data, err := os.ReadFile(envPath)
 	if err != nil {
 		return nil, err
@@ -42,9 +47,9 @@ func EnvPatchHosts(envPath string, site *config.SiteConfig) ([]string, error) {
 			continue
 		}
 		key = strings.TrimSpace(key)
-		if newVal, ok := repl[key]; ok && newVal != "" && val != newVal {
+		if nv, ok := patchedEnvValue(key, val, repl, site); ok {
 			changed = append(changed, key)
-			out.WriteString(key + "=" + newVal + "\n")
+			out.WriteString(key + "=" + nv + "\n")
 		} else {
 			out.WriteString(line + "\n")
 		}
@@ -99,8 +104,8 @@ func hostReplacements(site *config.SiteConfig) map[string]string {
 		"REDIS_PORT":         strconv.Itoa(m.Redis.Port),
 		"KAFKA_HOST":         kafkaHost,
 		"KAFKA_PORT":         strconv.Itoa(m.Kafka.Port),
-		"MINIO_HOST":         nacosHost, // 常见与业务同机；可在 site 扩展前默认 app 节点
 	}
+	putBinderKeys(repl, site)
 	putMySQLKeyedDB(repl, m)
 	return repl
 }
@@ -148,11 +153,181 @@ func mysqlKeyedDB(m config.MiddlewareConfig) (host string, port int, user, pass 
 	return strings.TrimSpace(m.MySQL.Host), port, strings.TrimSpace(m.MySQL.User), m.MySQL.Password
 }
 
-// PatchEnvTree 递归 patch 目录下全部 .env（业务模块含子目录）。
+// svcConn 某中间件在现场的连接（IP 来自节点规划，端口用组件默认值）。
+type svcConn struct {
+	host string
+	port int
+	user string
+	pass string
+}
+
+func connOf(site *config.SiteConfig, service, fallback string, port int, dbRole bool) svcConn {
+	roles := []string{"middleware"}
+	if dbRole {
+		roles = []string{"database"}
+	}
+	host := hostOfService(site, service, roles)
+	if host == "" {
+		host = strings.TrimSpace(fallback)
+	}
+	return svcConn{host: host, port: port}
+}
+
+// hostOfService 按 nodes[].services 找服务所在 IP；没有 services 时退回角色。
+// waterjob 同时认 water-job / water-job-biz。
+func hostOfService(site *config.SiteConfig, service string, fallbackRoles []string) string {
+	if site == nil || strings.TrimSpace(service) == "" {
+		return ""
+	}
+	wants := map[string]struct{}{}
+	for _, alias := range moduleNameAliases(service) {
+		a := strings.ToLower(strings.TrimSpace(alias))
+		if a != "" {
+			wants[a] = struct{}{}
+		}
+	}
+	for _, n := range site.Nodes {
+		for _, s := range n.Services {
+			if _, ok := wants[strings.ToLower(strings.TrimSpace(s))]; ok {
+				return strings.TrimSpace(n.IP)
+			}
+		}
+	}
+	if len(fallbackRoles) == 0 {
+		return ""
+	}
+	roleWant := map[string]struct{}{}
+	for _, r := range fallbackRoles {
+		roleWant[strings.ToLower(strings.TrimSpace(r))] = struct{}{}
+	}
+	for _, n := range site.Nodes {
+		for _, r := range n.Roles {
+			if _, ok := roleWant[strings.ToLower(strings.TrimSpace(r))]; ok {
+				return strings.TrimSpace(n.IP)
+			}
+		}
+	}
+	return ""
+}
+
+func patchedEnvValue(key, old string, repl map[string]string, site *config.SiteConfig) (string, bool) {
+	k := strings.ToUpper(strings.ReplaceAll(key, "-", "_"))
+	b := binderForKey(key)
+	spec := connFromBinder(site, b)
+	if b != nil && spec.host != "" && (isURLEnvKey(k) || looksLikeEndpoint(old)) {
+		nv := replaceHostPortInEndpoint(old, spec.host, spec.port)
+		if nv != "" && nv != old {
+			return nv, true
+		}
+	}
+	if nv, ok := repl[key]; ok && nv != "" && nv != old {
+		return nv, true
+	}
+	if b == nil || spec.host == "" {
+		return "", false
+	}
+	switch {
+	case isPortEnvKey(k):
+		if spec.port <= 0 {
+			return "", false
+		}
+		nv := strconv.Itoa(spec.port)
+		return nv, nv != old
+	case isUserEnvKey(k):
+		if spec.user == "" || spec.user == old {
+			return "", false
+		}
+		return spec.user, true
+	case isPassEnvKey(k):
+		if spec.pass == "" || spec.pass == old {
+			return "", false
+		}
+		return spec.pass, true
+	case isTokenEnvKey(k):
+		if b.Token == "" || b.Token == old {
+			return "", false
+		}
+		return b.Token, true
+	case isHostEnvKey(k):
+		return spec.host, spec.host != old
+	default:
+		return "", false
+	}
+}
+
+func looksLikeEndpoint(v string) bool {
+	v = strings.TrimSpace(v)
+	return strings.Contains(v, "://") || reHostPort.MatchString(v)
+}
+
+func isHostEnvKey(k string) bool {
+	return strings.HasSuffix(k, "_HOST") || strings.HasSuffix(k, "_HOSTNAME") ||
+		strings.HasSuffix(k, "_IP") || strings.HasSuffix(k, "_ADDR") ||
+		strings.HasSuffix(k, "_SERVER") || k == "MQTT_BROKER"
+}
+
+func isPortEnvKey(k string) bool {
+	return strings.HasSuffix(k, "_PORT")
+}
+
+func isUserEnvKey(k string) bool {
+	return strings.HasSuffix(k, "_USER") || strings.HasSuffix(k, "_USERNAME") || strings.HasSuffix(k, "_USER_NAME")
+}
+
+func isPassEnvKey(k string) bool {
+	return strings.HasSuffix(k, "_PASSWORD") || strings.HasSuffix(k, "_PASSWD") ||
+		strings.HasSuffix(k, "_PWD") || strings.HasSuffix(k, "_PSWD") || strings.HasSuffix(k, "_PASS")
+}
+
+func isTokenEnvKey(k string) bool {
+	return strings.HasSuffix(k, "_TOKEN") || strings.HasSuffix(k, "_ACCESS_TOKEN")
+}
+
+func isURLEnvKey(k string) bool {
+	return strings.Contains(k, "_URL") || strings.Contains(k, "ENDPOINT") ||
+		strings.Contains(k, "JDBC") || strings.HasSuffix(k, "_URI")
+}
+
+var reEndpoint = regexp.MustCompile(`(?i)^(.*?://)([^:/\[\]]+|\[[0-9a-f:]+\])(:\d+)?(.*)$`)
+var reHostPort = regexp.MustCompile(`^([^:/]+):(\d+)(.*)$`)
+
+// replaceHostPortInEndpoint 改 URL / JDBC / host:port 里的地址，保留 path、库名。
+func replaceHostPortInEndpoint(old, host string, port int) string {
+	old = strings.TrimSpace(old)
+	host = strings.TrimSpace(host)
+	if old == "" || host == "" {
+		return ""
+	}
+	if m := reEndpoint.FindStringSubmatch(old); m != nil {
+		p := m[3]
+		if port > 0 {
+			p = ":" + strconv.Itoa(port)
+		}
+		return m[1] + host + p + m[4]
+	}
+	if m := reHostPort.FindStringSubmatch(old); m != nil {
+		p := m[2]
+		if port > 0 {
+			p = strconv.Itoa(port)
+		}
+		return host + ":" + p + m[3]
+	}
+	return ""
+}
+
+// PatchEnvTree 递归 patch 目录下全部 .env（市政水厂 center/device、GIS 子目录、业务模块）。
+// 跳过 data/logs，避免走进容器数据盘导致漏改另一套 .env。
 func PatchEnvTree(root string, site *config.SiteConfig) ([]string, error) {
 	var all []string
 	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() {
+		if err != nil || info == nil {
+			return nil
+		}
+		if info.IsDir() {
+			lower := strings.ToLower(info.Name())
+			if lower == "data" || lower == "logs" || lower == "log" || lower == ".git" || lower == "bak" {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		if strings.ToLower(info.Name()) != ".env" {
@@ -168,4 +343,19 @@ func PatchEnvTree(root string, site *config.SiteConfig) ([]string, error) {
 		return nil
 	})
 	return all, err
+}
+
+// envPatchWalkRoots 决定从哪一层扫 .env。市政水厂即使只部署 center，也从包根扫，把 device 那份同样改掉。
+func envPatchWalkRoots(moduleDir string) []string {
+	dir := filepath.Clean(strings.TrimSpace(moduleDir))
+	if dir == "" {
+		return nil
+	}
+	if waterworkServiceKind(filepath.Base(dir)) != "" {
+		parent := filepath.Dir(dir)
+		if len(findNamedWaterworkComposes(parent)) > 0 {
+			return []string{parent}
+		}
+	}
+	return []string{dir}
 }

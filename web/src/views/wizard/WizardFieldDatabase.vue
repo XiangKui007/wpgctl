@@ -13,8 +13,15 @@ export default {
 <template>
         <div>
           <p class="wizard-step-purpose">{{ currentStepPurpose }}</p>
-          <div class="hint-banner">
-            <strong>步骤 3 / 8</strong> — 数据库模块无 <code>.env</code>，仅 <code>docker-compose</code>：有 zip 则解压，已有 .tar 则直接 load → compose up。
+          <div class="field-grid" style="margin-bottom:0.75rem">
+            <div class="field full">
+              <label class="req">middleware 根目录</label>
+              <div class="path-row">
+                <el-input v-model="fieldPaths.middlewareRoot" placeholder="如 /workspace/middle 或 /workspace/middleware" />
+                <el-button type="primary" plain size="small" @click="openPicker('middlewareRoot', 'dir')">浏览</el-button>
+              </div>
+              <p class="muted" style="margin:0.35rem 0 0">含 mysql / pgsql 的目录，或其外层。</p>
+            </div>
           </div>
           <div class="actions" style="margin-bottom:0.75rem" :class="{ busy }">
             <el-button type="primary"
@@ -52,7 +59,7 @@ export default {
               <span class="badge yellow">非必做</span>
             </div>
             <p class="muted" style="margin:0.35rem 0 0.65rem">
-              数据库容器起来之后，可从本机 Linux 磁盘勾选 <code>.sql</code>，按顺序打到 site.yaml 里的 MySQL 或 PostgreSQL。不选也能进入下一步。失败不会回滚已执行语句。
+              库名可空，按脚本或文件名切库。失败不回滚。
             </p>
             <div class="field" style="margin-bottom:0.65rem">
               <label>目标库</label>
@@ -65,7 +72,7 @@ export default {
               <label>库名（可空）</label>
               <el-input
                 v-model="sqlApplyDatabase"
-                :placeholder="sqlApplyDriver === 'pgsql' ? '空则连 postgres' : '空则不切库，脚本里自己 USE'"
+                placeholder="可空"
                 clearable
               />
             </div>
@@ -75,7 +82,7 @@ export default {
                 <el-input
                   :model-value="sqlApplySummary"
                   readonly
-                  placeholder="未选择；点浏览勾选本机 .sql"
+                  placeholder="未选择"
                 />
                 <el-button type="primary" plain size="small" @click="openPicker('sqlApplyFiles', 'sql')">浏览</el-button>
                 <el-button
@@ -102,9 +109,7 @@ export default {
               {{ activeJobKey === 'db-apply' ? '执行中…' : '执行已选 SQL' }}
             </el-button>
           </div>
-          <div class="log-box" v-if="jobLogs.length" style="margin-top:1rem">
-            <div v-for="(l, i) in jobLogs" :key="'db'+i" :class="logClass(l)">{{ l }}</div>
-          </div>
+          <JobLogBox :lines="jobLogs" :running="!!activeJobKey" />
           <div class="actions">
             <el-button plain @click="goToStep(1)">返回</el-button>
             <el-button type="primary" @click="completeFieldStep('database', 3)" :disabled="!fieldStepDone.docker">

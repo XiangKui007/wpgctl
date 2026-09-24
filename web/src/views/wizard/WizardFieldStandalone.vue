@@ -1,4 +1,4 @@
-﻿<script>
+<script>
 /** 现场向导 ⑥：市政水厂 / 模型服务；可一键连部 center → device → 模型。 */
 import { useConsole } from '@/composables/useConsole.js'
 
@@ -63,7 +63,7 @@ export default {
                   <div>
                     <strong>{{ sub.label }}</strong>
                     <span class="muted"> — {{ siteForm.paths[m.pathKey] || '（未配置，可跳过）' }}</span>
-                    <span v-if="!isLocalDocker && isMultiNode" class="node-target">@ {{ moduleTargetLabel(m.name, 'standalone') }}</span>
+                    <span v-if="isMultiNode" class="node-target">@ {{ moduleTargetLabel(m.name, 'standalone') }}</span>
                     <span v-if="fieldModuleStatus['std-'+m.name+'-'+sub.id]" class="badge green" style="margin-left:0.5rem">{{ fieldModuleStatus['std-'+m.name+'-'+sub.id] }}</span>
                   </div>
                   <div class="module-deploy-actions">
@@ -74,6 +74,13 @@ export default {
                       @click="openStandaloneEnvEditor(m.pathKey, sub.dirName)"
                       :disabled="busy || !siteForm.paths[m.pathKey] || !isServiceEnabled(m.name)"
                     >编辑 .env</el-button>
+                    <el-button
+                      type="primary"
+                      plain
+                      size="small"
+                      @click="openStandaloneComposeEditor(m.pathKey, sub.dirName)"
+                      :disabled="busy || !siteForm.paths[m.pathKey] || !isServiceEnabled(m.name)"
+                    >编辑 compose</el-button>
                     <el-button
                       type="success"
                       plain
@@ -91,7 +98,7 @@ export default {
                 <div>
                   <strong>{{ m.label }}</strong>
                   <span class="muted"> — {{ siteForm.paths[m.pathKey] || '（未配置，可跳过）' }}</span>
-                  <span v-if="!isLocalDocker && isMultiNode" class="node-target">@ {{ moduleTargetLabel(m.name, 'standalone') }}</span>
+                  <span v-if="isMultiNode" class="node-target">@ {{ moduleTargetLabel(m.name, 'standalone') }}</span>
                   <span v-if="fieldModuleStatus['std-'+m.name]" class="badge green" style="margin-left:0.5rem">{{ fieldModuleStatus['std-'+m.name] }}</span>
                 </div>
                 <div class="module-deploy-actions">
@@ -102,6 +109,13 @@ export default {
                     @click="openStandaloneEnvEditor(m.pathKey)"
                     :disabled="busy || !siteForm.paths[m.pathKey] || !isServiceEnabled(m.name)"
                   >编辑 .env</el-button>
+                  <el-button
+                    type="primary"
+                    plain
+                    size="small"
+                    @click="openStandaloneComposeEditor(m.pathKey)"
+                    :disabled="busy || !siteForm.paths[m.pathKey] || !isServiceEnabled(m.name)"
+                  >编辑 compose</el-button>
                   <el-button
                     type="success"
                     plain

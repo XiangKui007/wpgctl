@@ -77,6 +77,7 @@ export function defaultNode(name, ip, roles = [], services = []) {
     ip,
     sshUser: 'root',
     sshPort: 22,
+    sshPassword: '',
     roles: roles.slice(),
     services: services.slice(),
   }
@@ -101,13 +102,6 @@ export const moduleDefs = [
   { id: 'gis', label: 'GIS' },
   { id: 'monitor', label: '监控' },
   { id: 'graph', label: '组态' },
-]
-
-export const localStepDefs = [
-  { key: 'site', idx: '01', title: '节点配置', purpose: '填写本机节点与业务模块。' },
-  { key: 'precheck', idx: '02', title: '环境体检', purpose: '检查 Docker、端口、磁盘。红色项会阻断。' },
-  { key: 'init', idx: '03', title: '初始化', purpose: '创建目录、按需安装 Docker、启动防火墙（SSH 22、控制台 9527）。' },
-  { key: 'deploy', idx: '04', title: '部署启动', purpose: '按 manifest 启动全部服务。' },
 ]
 
 /** Linux 现场 8 步 SOP（Tab 可回看，前进软锁定） */

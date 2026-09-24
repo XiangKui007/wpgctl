@@ -171,9 +171,6 @@ func ensureDirs(site *config.SiteConfig, res *Result) error {
 		util.PackagesDir(),
 		util.StateDir(),
 	}
-	if strings.TrimSpace(site.Paths.NginxHTML) != "" {
-		dirs = append(dirs, site.Paths.NginxHTML)
-	}
 	if runtime.GOOS == "linux" {
 		dirs = append(dirs, DockerDataRoot(site))
 	}

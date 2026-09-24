@@ -174,7 +174,7 @@ export function svcNodeIP(s) {
 }
 
 /**
- * svcIsLocal 判断容器是否在本机 Docker。
+ * svcIsLocal 判断容器是否在本机。
  * @param {object} s
  * @returns {boolean}
  */
@@ -233,10 +233,9 @@ export function svcPortChips(s) {
 /**
  * svcSearchText 拼出状态页过滤用的小写全文。
  * @param {object} s
- * @param {boolean} [privacyMode] 开隐私时不搜镜像和 compose 目录
  * @returns {string}
  */
-export function svcSearchText(s, privacyMode) {
+export function svcSearchText(s) {
   return [
     svcService(s),
     svcName(s),
@@ -244,8 +243,8 @@ export function svcSearchText(s, privacyMode) {
     svcProject(s),
     svcPorts(s),
     svcNetworks(s),
-    privacyMode ? '' : svcImage(s),
-    privacyMode ? '' : svcComposeDir(s),
+    svcImage(s),
+    svcComposeDir(s),
     svcState(s),
     svcStatus(s),
     svcCreated(s),

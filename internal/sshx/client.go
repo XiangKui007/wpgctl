@@ -84,8 +84,11 @@ func Dial(opts Options) (Client, error) {
 	return &sshClient{client: cli}, nil
 }
 
-// DialNode 根据 site.yaml 节点信息建立连接。
+// DialNode 根据 site.yaml 节点信息建立连接。节点上已保存的密码优先，请求密码只补没有单独填写的机器。
 func DialNode(node config.Node, password, privateKey string) (Client, error) {
+	if p := strings.TrimSpace(node.SSH.Password); p != "" {
+		password = p
+	}
 	return Dial(Options{
 		Host:        node.IP,
 		Port:        node.SSH.Port,

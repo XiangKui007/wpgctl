@@ -1,6 +1,6 @@
-﻿<script>
+<script>
 /**
- * .env / nginx conf 弹框编辑：打开即读盘，保存写回，不打断向导步骤。
+ * .env / docker-compose / nginx conf 弹框编辑：打开即读盘，保存写回，不打断向导步骤。
  */
 import { computed, ref, watch } from 'vue'
 import { useConsole } from '@/composables/useConsole.js'
@@ -24,9 +24,14 @@ export default {
       const i = p.lastIndexOf('/')
       return i >= 0 ? p.slice(i + 1) : p || '配置文件'
     })
+    const editorLanguage = computed(() => {
+      const name = fileName.value.toLowerCase()
+      return name.endsWith('.yml') || name.endsWith('.yaml') ? 'yaml' : 'text'
+    })
     const title = computed(() => {
       const name = fileName.value
       if (name.endsWith('.env')) return '编辑 .env'
+      if (name.endsWith('.yml') || name.endsWith('.yaml')) return '编辑 docker-compose'
       if (name.endsWith('.conf')) return '编辑 Nginx 配置'
       return '编辑 ' + name
     })
@@ -47,6 +52,7 @@ export default {
       open,
       fileName,
       title,
+      editorLanguage,
       editorReady,
       candidateLabel,
       onOpened,
@@ -85,7 +91,7 @@ export default {
       <CodeEditor
         v-if="editorReady"
         v-model="fileEditor.text"
-        language="text"
+        :language="editorLanguage"
         height="56vh"
         @save="saveTextFile()"
       />

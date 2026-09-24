@@ -486,6 +486,42 @@
   display: block;
 }
 
+.monitor-fold {
+  margin-top: 0.55rem;
+  border: 0;
+}
+
+.monitor-fold.el-collapse {
+  --el-collapse-border-color: transparent;
+}
+
+.monitor-fold .el-collapse-item__header {
+  height: auto;
+  line-height: 1.4;
+  padding: 0.8rem 0.95rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.monitor-fold .el-collapse-item.is-active .el-collapse-item__header {
+  border-radius: 10px 10px 0 0;
+  border-bottom-color: transparent;
+}
+
+.monitor-fold .el-collapse-item__wrap {
+  border: 1px solid var(--line);
+  border-top: 0;
+  border-radius: 0 0 10px 10px;
+  background: var(--surface);
+}
+
+.monitor-fold .el-collapse-item__content {
+  padding: 0 0.95rem 0.9rem;
+}
+
 .module-deploy-list {
   display: flex;
   flex-direction: column;

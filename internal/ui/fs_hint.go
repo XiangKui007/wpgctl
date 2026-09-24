@@ -19,7 +19,7 @@ type FSPickHint struct {
 	Headline string   `json:"headline"`
 	Message  string   `json:"message"`
 	Enter    []string `json:"enter,omitempty"` // 建议再点进去的文件夹名
-	Marks    []string `json:"marks,omitempty"` // 作为到层依据的文件/文件夹
+	Marks    []string `json:"marks,omitempty"` // 已经到层的文件/文件夹名
 }
 
 func judgePickLevel(target, current string, entries []FSEntry) FSPickHint {
@@ -28,8 +28,8 @@ func judgePickLevel(target, current string, entries []FSEntry) FSPickHint {
 		return FSPickHint{
 			Level:    "idle",
 			Title:    title,
-			Headline: "从盘符开始往下进",
-			Message:  "一层一层点文件夹。到了标志齐全的那一层，再点「选择当前目录」，不要凭目录名猜。",
+			Headline: "从盘符往下点",
+			Message:  "",
 		}
 	}
 	files, dirs := splitPickEntries(entries)
@@ -42,19 +42,19 @@ func judgePickLevel(target, current string, entries []FSEntry) FSPickHint {
 		return hintManifestRoot(title, fileSet, dirs)
 	case "middlewareRoot":
 		return hintModuleRoot(title,
-			"看到 mysql、redis、nacos 等并列的文件夹就停，点「就选这一层」。不要点进 mysql 里面。",
+			"mysql、redis、nacos 已并列",
 			middlewareModuleNames(), []string{"middleware", "middle"}, 2,
-			base, fileSet, dirSet)
+			current, fileSet, dirSet)
 	case "platformRoot":
 		return hintModuleRoot(title,
-			"看到 public、device、gis 等并列的文件夹就停。不要点进 public 里面。",
+			"public、device 等已并列",
 			platformModuleNames(), []string{"platform"}, 2,
-			base, fileSet, dirSet)
+			current, fileSet, dirSet)
 	case "waterworkDir":
 		return hintWaterwork(title, base, fileSet, dirSet, dirs)
 	case "intelligentModelDir":
 		return hintComposeRoot(title,
-			"看到 docker-compose 和 .env 就停，这是模型包根。",
+			"有 docker-compose 和 .env",
 			base, []string{"intelligent-model", "intelligent_model"}, fileSet, dirSet)
 	case "nginxDir":
 		return hintNginx(title, base, fileSet, dirSet)
@@ -73,8 +73,8 @@ func judgePickLevel(target, current string, entries []FSEntry) FSPickHint {
 		return FSPickHint{
 			Level:    "unknown",
 			Title:    title,
-			Headline: "按下面标志找",
-			Message:  "对照列表里的文件判断是否到层：compose、.env、manifest.yaml 通常出现在该选的那一层。",
+			Headline: "对照列表里的文件",
+			Message:  "compose、.env 或 manifest.yaml 出现时再选",
 		}
 	}
 }
@@ -118,7 +118,7 @@ func hintManifestRoot(title string, fileSet map[string]bool, dirs []FSEntry) FSP
 			Level:    "ready",
 			Title:    title,
 			Headline: "可以选这一层",
-			Message:  "当前目录有 manifest.yaml，这就是包根。点「就选这一层」。",
+			Message:  "有 manifest.yaml",
 			Marks:    []string{"manifest.yaml"},
 		}
 	}
@@ -133,7 +133,7 @@ func hintManifestRoot(title string, fileSet map[string]bool, dirs []FSEntry) FSP
 			Level:    "deeper",
 			Title:    title,
 			Headline: "再往下进一层",
-			Message:  "点带 [manifest] 的文件夹，那一层才是包根。",
+			Message:  "点带 manifest 的文件夹",
 			Enter:    enter,
 		}
 	}
@@ -141,17 +141,18 @@ func hintManifestRoot(title string, fileSet map[string]bool, dirs []FSEntry) FSP
 		Level:    "unknown",
 		Title:    title,
 		Headline: "还没到包根",
-		Message:  "继续往下找，直到当前层直接出现 manifest.yaml。",
+		Message:  "找到直接含 manifest.yaml 的那一层",
 	}
 }
 
-func hintModuleRoot(title, readyMsg string, modules, nests []string, min int, base string, fileSet, dirSet map[string]bool) FSPickHint {
-	if containsFold(modules, base) && hasComposeOrEnv(fileSet) {
+func hintModuleRoot(title, readyMsg string, modules, nests []string, min int, current string, fileSet, dirSet map[string]bool) FSPickHint {
+	// 路径里已经出现模块名，说明点进了 mysql 或它的子目录，不能再说「还没到根」。
+	if pathHasSegment(current, modules) {
 		return FSPickHint{
 			Level:    "up",
 			Title:    title,
 			Headline: "选深了，点「上级」",
-			Message:  "现在在单个模块里面。要选能同时看到多个模块文件夹的那一层。",
+			Message:  "回到能看到多个模块的那一层",
 		}
 	}
 	hits := intersectFold(dirSet, modules)
@@ -170,15 +171,24 @@ func hintModuleRoot(title, readyMsg string, modules, nests []string, min int, ba
 			Level:    "deeper",
 			Title:    title,
 			Headline: "再往下进一层",
-			Message:  "现场 zip 常解出同名套层。点进「" + nestHits[0] + "」，里面才是模块并列的那一层。",
+			Message:  "点进「" + nestHits[0] + "」",
 			Enter:    nestHits,
+		}
+	}
+	// 已经在 middleware / platform 套层下面，再往下也不是根。
+	if pathBelowSegment(current, nests) {
+		return FSPickHint{
+			Level:    "up",
+			Title:    title,
+			Headline: "选深了，点「上级」",
+			Message:  "回到能看到多个模块的那一层",
 		}
 	}
 	return FSPickHint{
 		Level:    "unknown",
 		Title:    title,
 		Headline: "还没到根",
-		Message:  "继续往下找。到层标志：多个模块文件夹排在一起（例如 " + strings.Join(sampleNames(modules, 3), "、") + "）。",
+		Message:  "找到 " + strings.Join(sampleNames(modules, 3), "、") + " 并列处",
 	}
 }
 
@@ -188,7 +198,7 @@ func hintWaterwork(title, base string, fileSet, dirSet map[string]bool, dirs []F
 			Level:    "up",
 			Title:    title,
 			Headline: "选深了，点「上级」",
-			Message:  "现在在 center 或 device 里面。包根是能同时看到 waterwork-center 和 waterwork-device 的那一层。",
+			Message:  "回到能同时看到 center 和 device 的那一层",
 		}
 	}
 	hits := intersectFold(dirSet, []string{"waterwork-center", "waterwork-device"})
@@ -200,9 +210,9 @@ func hintWaterwork(title, base string, fileSet, dirSet map[string]bool, dirs []F
 		}
 	}
 	if len(hits) >= 1 {
-		msg := "看到 waterwork-center / waterwork-device 就停。两套都在更好，缺一套也能先选。"
+		msg := "center / device 已出现"
 		if len(hits) == 1 {
-			msg = "已经看到 " + hits[0] + "。通常同一层还有另一套；没有的话也可以先选这一层。"
+			msg = "已看到 " + hits[0]
 		}
 		return FSPickHint{
 			Level:    "ready",
@@ -224,7 +234,7 @@ func hintWaterwork(title, base string, fileSet, dirSet map[string]bool, dirs []F
 			Level:    "deeper",
 			Title:    title,
 			Headline: "再往下进一层",
-			Message:  "点进水厂包文件夹，里面应能看到 waterwork-center 和 waterwork-device。",
+			Message:  "点进水厂包文件夹",
 			Enter:    enter,
 		}
 	}
@@ -232,7 +242,7 @@ func hintWaterwork(title, base string, fileSet, dirSet map[string]bool, dirs []F
 		Level:    "unknown",
 		Title:    title,
 		Headline: "还没到水厂包根",
-		Message:  "继续往下找，直到当前层同时出现 waterwork-center、waterwork-device。不要选 platform 下面的目录。",
+		Message:  "找到 waterwork-center、waterwork-device",
 	}
 }
 
@@ -252,7 +262,7 @@ func hintComposeRoot(title, readyMsg, base string, nestNames []string, fileSet, 
 			Level:    "deeper",
 			Title:    title,
 			Headline: "再往下进一层",
-			Message:  "点进「" + nests[0] + "」，找到带 docker-compose 的那一层。",
+			Message:  "点进「" + nests[0] + "」",
 			Enter:    nests,
 		}
 	}
@@ -261,7 +271,7 @@ func hintComposeRoot(title, readyMsg, base string, nestNames []string, fileSet, 
 		Level:    "unknown",
 		Title:    title,
 		Headline: "还没到包根",
-		Message:  "继续往下找，直到当前层出现 docker-compose.yml / .env。",
+		Message:  "找到带 docker-compose 的那一层",
 	}
 }
 
@@ -271,7 +281,7 @@ func hintNginx(title, base string, fileSet, dirSet map[string]bool) FSPickHint {
 			Level:    "up",
 			Title:    title,
 			Headline: "选深了，点「上级」",
-			Message:  "html 是前端静态目录。Nginx 模块是上一层（有 docker-compose 的那层）。",
+			Message:  "Nginx 在上一层",
 		}
 	}
 	if hasCompose(fileSet) && (base == "nginx" || dirSet["html"] || dirSet["conf"] || fileSet["nginx.conf"]) {
@@ -283,7 +293,7 @@ func hintNginx(title, base string, fileSet, dirSet map[string]bool) FSPickHint {
 			Level:    "ready",
 			Title:    title,
 			Headline: "可以选这一层",
-			Message:  "有 docker-compose，这就是 Nginx 模块目录。点「就选这一层」。",
+			Message:  "有 docker-compose",
 			Marks:    marks,
 		}
 	}
@@ -300,7 +310,7 @@ func hintNginx(title, base string, fileSet, dirSet map[string]bool) FSPickHint {
 		Level:    "unknown",
 		Title:    title,
 		Headline: "还没到 Nginx 目录",
-		Message:  "继续往下找名为 nginx、且带 docker-compose 的文件夹。",
+		Message:  "找到带 docker-compose 的 nginx",
 	}
 }
 
@@ -317,7 +327,7 @@ func hintDockerPkg(title string, fileSet map[string]bool, dirs []FSEntry) FSPick
 			Level:    "ready",
 			Title:    title,
 			Headline: "可以选这一层",
-			Message:  "看到离线安装脚本或 docker.service 就停。",
+			Message:  "有安装脚本或 docker.service",
 			Marks:    marks,
 		}
 	}
@@ -340,7 +350,7 @@ func hintDockerPkg(title string, fileSet map[string]bool, dirs []FSEntry) FSPick
 		Level:    "unknown",
 		Title:    title,
 		Headline: "还没到安装包",
-		Message:  "继续往下找 docker_package，直到出现 offline_install_docker.sh。",
+		Message:  "找到 offline_install_docker.sh",
 	}
 }
 
@@ -350,7 +360,7 @@ func hintBasePkg(title string, fileSet, dirSet map[string]bool, dirs []FSEntry) 
 			Level:    "ready",
 			Title:    title,
 			Headline: "可以选这一层",
-			Message:  "标准 base 含 docker-install；也可以选中间件根目录。",
+			Message:  "含 docker-install",
 			Marks:    []string{"docker-install"},
 		}
 	}
@@ -360,7 +370,7 @@ func hintBasePkg(title string, fileSet, dirSet map[string]bool, dirs []FSEntry) 
 			Level:    "ready",
 			Title:    title,
 			Headline: "可以选这一层",
-			Message:  "当前像中间件根，可以当 base 用。",
+			Message:  "可当 base 用",
 			Marks:    hits,
 		}
 	}
@@ -369,7 +379,7 @@ func hintBasePkg(title string, fileSet, dirSet map[string]bool, dirs []FSEntry) 
 			Level:    "deeper",
 			Title:    title,
 			Headline: "再往下进一层",
-			Message:  "点进 docker_package，或回到含 docker-install 的 base 包。",
+			Message:  "点进 docker_package",
 			Enter:    []string{"docker_package"},
 		}
 	}
@@ -379,7 +389,7 @@ func hintBasePkg(title string, fileSet, dirSet map[string]bool, dirs []FSEntry) 
 		Level:    "unknown",
 		Title:    title,
 		Headline: "还没到 base",
-		Message:  "标准 base 含 docker-install/；也可以选中间件根（mysql、redis 并列的那层）。",
+		Message:  "找 docker-install，或 mysql、redis 并列的那一层",
 	}
 }
 
@@ -389,7 +399,7 @@ func hintWorkspace(title, base string, dirSet map[string]bool) FSPickHint {
 			Level:    "ready",
 			Title:    title,
 			Headline: "可以选这一层",
-			Message:  "当前就是工作簿根。下面通常会有 platform、middleware。",
+			Message:  "当前就是工作簿根",
 			Marks:    []string{"workspace"},
 		}
 	}
@@ -398,7 +408,7 @@ func hintWorkspace(title, base string, dirSet map[string]bool) FSPickHint {
 			Level:    "ready",
 			Title:    title,
 			Headline: "可以选这一层",
-			Message:  "已经能看到 platform / 中间件目录，可以当工作簿根。",
+			Message:  "已看到 platform / 中间件",
 			Marks:    intersectFold(dirSet, []string{"platform", "middleware", "middle", "docker_data"}),
 		}
 	}
@@ -407,15 +417,15 @@ func hintWorkspace(title, base string, dirSet map[string]bool) FSPickHint {
 			Level:    "deeper",
 			Title:    title,
 			Headline: "再往下进一层",
-			Message:  "点进 workspace。也可以停在这一层，工具会自动接上 workspace。",
+			Message:  "点进 workspace，或停在这一层",
 			Enter:    []string{"workspace"},
 		}
 	}
 	return FSPickHint{
 		Level:    "unknown",
 		Title:    title,
-		Headline: "找名为 workspace 的目录",
-		Message:  "选工作簿根（常见名 workspace）。选它的上一层也可以，工具会补上 /workspace。",
+		Headline: "找 workspace",
+		Message:  "选它或它的上一层都可以",
 	}
 }
 
@@ -516,6 +526,40 @@ func intersectFold(have map[string]bool, names []string) []string {
 		if have[k] && !seen[k] {
 			seen[k] = true
 			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// pathHasSegment 当前路径的任一段（含当前目录名）是否命中 names。
+func pathHasSegment(current string, names []string) bool {
+	for _, seg := range pathSegments(current) {
+		if containsFold(names, seg) {
+			return true
+		}
+	}
+	return false
+}
+
+// pathBelowSegment 当前目录已经位于 names 中某个目录的里面（当前名本身不算）。
+func pathBelowSegment(current string, names []string) bool {
+	segs := pathSegments(current)
+	if len(segs) < 2 {
+		return false
+	}
+	for _, seg := range segs[:len(segs)-1] {
+		if containsFold(names, seg) {
+			return true
+		}
+	}
+	return false
+}
+
+func pathSegments(current string) []string {
+	var out []string
+	for _, seg := range strings.Split(filepath.ToSlash(current), "/") {
+		if seg != "" {
+			out = append(out, seg)
 		}
 	}
 	return out

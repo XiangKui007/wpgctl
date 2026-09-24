@@ -1,4 +1,4 @@
-﻿<script>
+<script>
 /** 开始前：默认选 `/`，其下没有 workspace 则创建，已有则跳过并进入向导。 */
 import { useConsole } from '@/composables/useConsole.js'
 
@@ -27,7 +27,7 @@ export default {
             <div class="path-row">
               <el-input
                 v-model="siteForm.paths.workspace"
-                :placeholder="isLocalDocker ? 'D:/' : '/'" />
+                placeholder="/" />
               <el-button type="primary" plain size="small" @click="openPicker('pathsWorkspace', 'dir')">浏览</el-button>
             </div>
           </div>

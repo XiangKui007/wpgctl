@@ -61,6 +61,39 @@ func TestGetFSTextFindsNestedEnv(t *testing.T) {
 	}
 }
 
+func TestGetFSTextFindsComposeYmlWhenAskedYaml(t *testing.T) {
+	root := t.TempDir()
+	mod := filepath.Join(root, "public")
+	if err := os.MkdirAll(mod, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	compose := filepath.Join(mod, "docker-compose.yml")
+	if err := os.WriteFile(compose, []byte("services:\n  app: {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{}
+	req := textReq(http.MethodGet, filepath.Join(mod, "docker-compose.yaml"), true, nil)
+	rec := httptest.NewRecorder()
+	s.handleFSText(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("status %d body %s", rec.Code, rec.Body.String())
+	}
+	var out map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := out["path"].(string)
+	if filepath.Clean(got) != filepath.Clean(compose) {
+		t.Fatalf("path %q want %q", got, compose)
+	}
+	if !strings.Contains(out["text"].(string), "services:") {
+		t.Fatalf("text: %v", out["text"])
+	}
+	if hint, _ := out["hint"].(string); hint != "" {
+		t.Fatalf("yml 与 yaml 是同一份文件，不应提示找不到: %q", hint)
+	}
+}
+
 func TestGetFSTextMissingEnvIsEmptyDraft(t *testing.T) {
 	mod := t.TempDir()
 	s := &Server{}

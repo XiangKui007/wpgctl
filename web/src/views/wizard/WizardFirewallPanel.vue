@@ -23,7 +23,7 @@ export default {
       <span class="badge" :class="firewallBadge.cls">{{ firewallBadge.text }}</span>
       <span class="muted">{{ firewallToolLabel }}</span>
     </div>
-    <div v-if="!isLocalDocker && siteForm.nodes.length" class="fw-node-switch">
+    <div v-if="siteForm.nodes.length" class="fw-node-switch">
       <span class="muted">检查机器</span>
       <el-button
         v-for="(n, i) in siteForm.nodes"

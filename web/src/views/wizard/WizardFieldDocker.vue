@@ -1,4 +1,4 @@
-﻿<script>
+<script>
 /** 现场向导 ②：离线安装 Docker。 */
 import { useConsole } from '@/composables/useConsole.js'
 import WizardFirewallPanel from './WizardFirewallPanel.vue'
@@ -19,7 +19,7 @@ export default {
             <div class="node-section-head">
               <div>
                 <strong>各机器 Docker</strong>
-                <p class="muted">状态挂在对应机器后面，避免和顶栏「本机 Docker」搞混。</p>
+                <p class="muted">状态挂在对应机器后面。</p>
               </div>
               <el-button type="primary" plain size="small" :loading="nodeDockerBusy" @click="refreshNodeDocker">
                 {{ nodeDockerBusy ? '检查中…' : '重新检查' }}

@@ -1,5 +1,5 @@
-﻿<script>
-/** 顶栏：品牌、主导航、现场开关与诊断包。 */
+<script>
+/** 顶栏：品牌、主导航与操作者。 */
 import { useConsole } from '@/composables/useConsole.js'
 
 export default {
@@ -17,7 +17,7 @@ export default {
           <span class="mark" aria-hidden="true"></span>
           <div class="brand-text">
             <strong>WPGCTL</strong>
-            <span>{{ isLocalDocker ? '本机 Docker 联调' : 'Linux 现场交付' }}</span>
+            <span>Linux 现场交付</span>
           </div>
         </div>
         <div class="topbar-tools">
@@ -53,29 +53,11 @@ export default {
           <div class="tool-switches">
             <el-switch
               size="small"
-              :model-value="isLocalDocker"
-              active-text="本机 Docker"
-              @change="onLocalDockerToggle"
-            />
-            <el-switch size="small" v-model="settings.privacyMode" active-text="投屏" @change="saveSettings" />
-            <el-switch
-              size="small"
               v-model="settings.advancedMode"
               active-text="一键部署"
               @change="saveSettings"
             />
           </div>
-          <el-button
-            type="primary"
-            plain
-            size="small"
-            :disabled="busy"
-            title="打包日志和配置，发给公司排查"
-            @click="downloadDiag"
-          >
-            <el-icon><Download /></el-icon>
-            诊断包
-          </el-button>
           <a
             v-if="settings.advancedMode"
             class="el-button el-button--small el-button--primary is-plain"

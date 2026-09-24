@@ -1,4 +1,4 @@
-﻿<script>
+<script>
 /** 运行状态：本机与从机 Docker 容器卡片。多机按节点分栏，单机两列网格。 */
 import { computed } from 'vue'
 import { useConsole } from '@/composables/useConsole.js'
@@ -94,7 +94,7 @@ export default {
         </summary>
         <div class="field-grid" style="margin-top:0.6rem">
           <div class="field">
-            <label>从机 SSH 密码（仅本次会话，不落盘）</label>
+            <label>未单独填写的机器使用此 SSH 密码</label>
             <el-input v-model="sshCreds.password" type="password" autocomplete="new-password" placeholder="各从机相同密码时填写" show-password />
           </div>
           <div class="field">

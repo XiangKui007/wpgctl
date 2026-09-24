@@ -1,4 +1,4 @@
-﻿<script>
+<script>
 /** 部署向导壳：步骤条、SSH 分发；步骤页按需懒加载，单独成分包。 */
 import { defineAsyncComponent } from 'vue'
 import { useConsole } from '@/composables/useConsole.js'
@@ -14,9 +14,6 @@ export default {
     WizardFieldStandalone: defineAsyncComponent(() => import('./wizard/WizardFieldStandalone.vue')),
     WizardFieldNginx: defineAsyncComponent(() => import('./wizard/WizardFieldNginx.vue')),
     WizardFieldVerify: defineAsyncComponent(() => import('./wizard/WizardFieldVerify.vue')),
-    WizardLocalPrecheck: defineAsyncComponent(() => import('./wizard/WizardLocalPrecheck.vue')),
-    WizardLocalInit: defineAsyncComponent(() => import('./wizard/WizardLocalInit.vue')),
-    WizardLocalDeploy: defineAsyncComponent(() => import('./wizard/WizardLocalDeploy.vue')),
   },
   setup() {
     return useConsole()
@@ -29,10 +26,7 @@ export default {
       <div class="panel-head">
         <div>
           <h2>部署向导</h2>
-          <p>
-            <template v-if="isLocalDocker">本机 Docker 联调。</template>
-            <template v-else>Linux 现场部署。</template>
-          </p>
+          <p>Linux 现场部署。</p>
         </div>
       </div>
 
@@ -67,7 +61,7 @@ export default {
           </summary>
           <div class="field-grid" style="margin-top:0.6rem">
             <div class="field">
-              <label>从机 SSH 密码（仅本次会话，不落盘）</label>
+              <label>未单独填写的机器使用此 SSH 密码</label>
               <el-input v-model="sshCreds.password" type="password" autocomplete="new-password" placeholder="各从机相同密码时填写" show-password />
             </div>
             <div class="field">
@@ -96,7 +90,7 @@ export default {
           </summary>
           <div class="field-grid" style="margin-top:0.6rem">
             <div class="field">
-              <label>从机 SSH 密码（仅本次会话，不落盘）</label>
+              <label>未单独填写的机器使用此 SSH 密码</label>
               <el-input v-model="sshCreds.password" type="password" autocomplete="new-password" placeholder="各从机相同密码时填写" show-password />
             </div>
             <div class="field">
@@ -106,16 +100,13 @@ export default {
           </div>
         </details>
         <WizardSiteStep v-if="wizardStep === 0" />
-        <WizardFieldDocker v-else-if="!isLocalDocker && wizardStep === 1" />
-        <WizardFieldDatabase v-else-if="!isLocalDocker && wizardStep === 2" />
-        <WizardFieldMiddleware v-else-if="!isLocalDocker && wizardStep === 3" />
-        <WizardFieldBusiness v-else-if="!isLocalDocker && wizardStep === 4" />
-        <WizardFieldStandalone v-else-if="!isLocalDocker && wizardStep === 5" />
-        <WizardFieldNginx v-else-if="!isLocalDocker && wizardStep === 6" />
-        <WizardFieldVerify v-else-if="!isLocalDocker && wizardStep === 7" />
-        <WizardLocalPrecheck v-else-if="isLocalDocker && wizardStep === 1" />
-        <WizardLocalInit v-else-if="isLocalDocker && wizardStep === 2" />
-        <WizardLocalDeploy v-else-if="isLocalDocker && wizardStep === 3" />
+        <WizardFieldDocker v-else-if="wizardStep === 1" />
+        <WizardFieldDatabase v-else-if="wizardStep === 2" />
+        <WizardFieldMiddleware v-else-if="wizardStep === 3" />
+        <WizardFieldBusiness v-else-if="wizardStep === 4" />
+        <WizardFieldStandalone v-else-if="wizardStep === 5" />
+        <WizardFieldNginx v-else-if="wizardStep === 6" />
+        <WizardFieldVerify v-else-if="wizardStep === 7" />
       </div>
     </section>
 </template>

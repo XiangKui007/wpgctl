@@ -113,8 +113,8 @@ func TestEnvPatchHosts_ExtraMiddlewareFromNodes(t *testing.T) {
 	for _, want := range []string{
 		"NACOS_HOST=10.10.104.22",
 		"MINIO_HOST=10.10.104.22",
-		"MINIO_PORT=9500",
-		"MINIO_ENDPOINT=http://10.10.104.22:9500",
+		"MINIO_PORT=9000",
+		"MINIO_ENDPOINT=http://10.10.104.22:9000",
 		"INFLUXDB_HOST=10.10.104.22",
 		"INFLUXDB_URL=http://10.10.104.22:8086",
 		"MQTT_HOST=10.10.104.22",

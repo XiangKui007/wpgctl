@@ -1,4 +1,4 @@
-﻿<script>
+<script>
 /** 服务日志：WebSocket 跟随 docker logs -f；多机可选从机，经 SSH 执行同一条命令。 */
 import { nextTick, ref, watch } from 'vue'
 import { useConsole } from '@/composables/useConsole.js'
@@ -44,7 +44,7 @@ export default {
           </div>
           <div class="field" v-if="logNodeOptions.length > 1">
             <label>节点</label>
-            <el-select v-model="logNodeIP" placeholder="本机 Docker" style="width:100%">
+            <el-select v-model="logNodeIP" placeholder="本机" style="width:100%">
               <el-option
                 v-for="n in logNodeOptions"
                 :key="n.value"
@@ -65,7 +65,7 @@ export default {
           </summary>
           <div class="field-grid" style="margin-top:0.6rem">
             <div class="field">
-              <label>从机 SSH 密码（仅本次会话）</label>
+              <label>未单独填写的机器使用此 SSH 密码</label>
               <el-input v-model="sshCreds.password" type="password" autocomplete="new-password" placeholder="各从机相同密码时填写" show-password />
             </div>
             <div class="field">

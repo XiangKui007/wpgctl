@@ -21,7 +21,7 @@ type ClusterOptions struct {
 	SSHKeyPath  string
 }
 
-// QueryCluster 查本机 Docker，再 SSH 查从机 docker ps；从机失败只记到对应节点，不让整页空白。
+// QueryCluster 查本机，再 SSH 查从机 docker ps；从机失败只记到对应节点，不让整页空白。
 func QueryCluster(opts ClusterOptions) (ServiceListResult, error) {
 	res, err := QueryServices(opts.ComposeRoot)
 	if err != nil {

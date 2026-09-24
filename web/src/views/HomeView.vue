@@ -1,5 +1,5 @@
-﻿<script>
-/** 首页：入口、当前模式路径，以及本机 Docker 的现场注意点。 */
+<script>
+/** 首页：入口与现场交付路径。 */
 import { useConsole } from '@/composables/useConsole.js'
 
 export default {
@@ -17,7 +17,7 @@ export default {
           <h1>WPG<em>CTL</em></h1>
           <p class="lead">{{ heroLead }}</p>
           <div class="cta-row">
-            <el-button type="primary" @click="goDeployEntry">{{ isLocalDocker ? '打开部署向导' : '准备环境' }}</el-button>
+            <el-button type="primary" @click="goDeployEntry">准备环境</el-button>
             <el-button v-if="settings.advancedMode" type="primary" plain @click="openFetch">打开包中心</el-button>
           </div>
         </div>
@@ -25,7 +25,7 @@ export default {
           <div class="wave-panel">
             <div class="meta">
               <strong>{{ siteName }}</strong>
-              <span>{{ siteCode }} · {{ isLocalDocker ? '本机联调' : '现场交付' }}</span>
+              <span>{{ siteCode }}</span>
             </div>
           </div>
         </div>
@@ -39,7 +39,7 @@ export default {
             show-icon
             :closable="false"
             title="Docker 未就绪"
-            :description="isLocalDocker ? '请先启动 Docker Desktop。' : '请确认现场 Docker 已运行（向导步骤 ② 可离线安装）。'"
+            description="请确认现场 Docker 已运行（向导步骤 ② 可离线安装）。"
           />
           <template v-if="settings.advancedMode">
             <el-alert v-if="packagesCount === 0" type="info" show-icon :closable="false" title="尚无交付包" description="请先到包中心拉取或导入。">
@@ -49,61 +49,32 @@ export default {
           </template>
         </div>
 
-        <div class="mode-bar">
-          <div>
-            <h2>{{ isLocalDocker ? '本机 Docker 联调' : 'Linux 现场交付' }}</h2>
-            <p>{{ platformHint }}</p>
-          </div>
-          <el-switch :model-value="isLocalDocker" active-text="本机 Docker" @change="onLocalDockerToggle" />
-        </div>
-
-        <ol class="home-sop" :aria-label="isLocalDocker ? '本机联调步骤' : '现场交付步骤'">
-          <template v-if="!isLocalDocker">
+        <header class="home-sop-head">
+          <h2>开始交付</h2>
+          <p>按下面三步，完成水厂项目现场部署</p>
+        </header>
+        <ol class="home-sop" aria-label="现场交付步骤">
             <li>
               <span class="home-sop-idx">1</span>
               <div>
                 <strong>放到主控机</strong>
-                <p>把 <code>wpgctl</code> 拷到现场 Linux，工作簿根默认 <code>/workspace</code>。</p>
+                <p>将 wpgctl 二进制上传至现场 Linux 主控机，默认工作目录 <code>/workspace</code></p>
               </div>
             </li>
             <li>
               <span class="home-sop-idx">2</span>
               <div>
                 <strong>准备安装包</strong>
-                <p>middleware / platform / sz-waterwork /model 等目录放到约定路径。</p>
+                <p>将基础包、版本包、补丁包放置到约定目录</p>
               </div>
             </li>
             <li>
               <span class="home-sop-idx">3</span>
               <div>
                 <strong>按向导交付</strong>
-                <p>① 节点到 ⑧ 验收在向导里完成，不用记命令。熟练后可用「一键部署」（二期功能）</p>
+                <p>跟随向导完成节点配置、部署与验收。熟练后可使用【一键部署】（二期功能）</p>
               </div>
             </li>
-          </template>
-          <template v-else>
-            <li>
-              <span class="home-sop-idx">1</span>
-              <div>
-                <strong>启动 Desktop</strong>
-                <p>安装并启动 Docker Desktop，建议 WSL2 后端。</p>
-              </div>
-            </li>
-            <li>
-              <span class="home-sop-idx">2</span>
-              <div>
-                <strong>用本机路径</strong>
-                <p>site 里 paths 用盘符路径，中间件可先填 <code>127.0.0.1</code>。</p>
-              </div>
-            </li>
-            <li>
-              <span class="home-sop-idx">3</span>
-              <div>
-                <strong>跑通向导</strong>
-                <p>打开部署向导做体检 → 初始化 → 部署。Desktop 不支持 <code>network_mode: host</code>，相关服务走 bridge 端口映射。</p>
-              </div>
-            </li>
-          </template>
         </ol>
         <p v-if="settings.advancedMode" class="home-sop-note muted">
           日常 1～3 个服务补丁走顶栏「升级」；失败会回滚镜像，SQL 需人工评估。

@@ -54,8 +54,24 @@ function Invoke-UiBuild {
         }
         & npm.cmd install
         if ($LASTEXITCODE -ne 0) { throw "npm install failed (exit $LASTEXITCODE)" }
-        & npm.cmd run build
-        if ($LASTEXITCODE -ne 0) { throw "npm run build failed (exit $LASTEXITCODE)" }
+        # Vite/esbuild 在 Windows 上偶发访问冲突（exit -1073741819 / 0xC0000005），
+        # 多半是两次构建同时占着 esbuild.exe。隔一下再试，不是源码错误。
+        $uiOk = $false
+        foreach ($try in 1..3) {
+            & npm.cmd run build
+            if ($LASTEXITCODE -eq 0) {
+                $uiOk = $true
+                break
+            }
+            $code = $LASTEXITCODE
+            if ($try -lt 3 -and ($code -eq -1073741819 -or $code -eq 3221225477)) {
+                Write-Host ">> vite crashed (exit $code), retry $try/3" -ForegroundColor Yellow
+                Start-Sleep -Seconds 2
+                continue
+            }
+            throw "npm run build failed (exit $code)"
+        }
+        if (-not $uiOk) { throw 'npm run build failed' }
     } finally {
         Pop-Location
     }

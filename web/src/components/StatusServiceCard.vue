@@ -1,4 +1,4 @@
-﻿<script>
+<script>
 /**
  * StatusServiceCard 状态页单条 Docker 服务卡片。
  * 主控机 / 从机共用同一套字段（空值显示 —），避免 compose 与 docker ps 数据源导致行数对不齐。
@@ -92,12 +92,10 @@ export default {
           <span v-else-if="svcPorts(service)" class="muted" :title="svcPorts(service)">内部端口</span>
           <span v-else class="muted">—</span>
         </dd>
-        <template v-if="!settings.privacyMode">
-          <dt class="status-wide-label" title="镜像">镜像</dt>
-          <dd class="status-wide status-image" :title="svcImage(service)">{{ svcImage(service) || '—' }}</dd>
-        </template>
+        <dt class="status-wide-label" title="镜像">镜像</dt>
+        <dd class="status-wide status-image" :title="svcImage(service)">{{ svcImage(service) || '—' }}</dd>
         <dt class="status-wide-label" title="Compose 工作目录">目录</dt>
-        <dd class="status-wide status-image" :title="svcComposeDir(service)">{{ settings.privacyMode && svcComposeDir(service) ? '******' : (svcComposeDir(service) || '—') }}</dd>
+        <dd class="status-wide status-image" :title="svcComposeDir(service)">{{ svcComposeDir(service) || '—' }}</dd>
         <template v-if="svcExitCode(service) !== null">
           <dt title="退出码">退出</dt>
           <dd class="status-health bad">{{ svcExitCode(service) }}</dd>

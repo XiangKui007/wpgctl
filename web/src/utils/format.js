@@ -98,13 +98,13 @@ export function resolveWorkbookFromParent(parent, fallback) {
 }
 
 /**
- * isEditableConfigFile 判断路径是否允许在对话框里改（.env / .conf）。
+ * isEditableConfigFile 判断路径是否允许在对话框里改（.env / compose / .conf）。
  * @param {string} path 文件路径
  * @returns {boolean}
  */
 export function isEditableConfigFile(path) {
   const p = String(path || '').toLowerCase()
-  return p.endsWith('.env') || p.endsWith('.conf')
+  return p.endsWith('.env') || p.endsWith('.conf') || p.endsWith('.yml') || p.endsWith('.yaml')
 }
 
 /**

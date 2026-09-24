@@ -9,7 +9,7 @@ import (
 	"github.com/wpg/wpgctl/internal/util"
 )
 
-// NginxRuntime 本模块 compose 在本机 Docker 上的运行情况。
+// NginxRuntime 本模块 compose 在本机上的运行情况。
 // 只认 nginx 目录对应的项目，不用整机 docker ps，避免把别的 nginx 当成已部署。
 type NginxRuntime struct {
 	ModuleDir string   `json:"moduleDir"`

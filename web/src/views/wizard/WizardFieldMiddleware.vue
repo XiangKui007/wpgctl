@@ -1,4 +1,4 @@
-﻿<script>
+<script>
 /** 现场向导 ④：中间件部署与 Nacos 导入。 */
 import { useConsole } from '@/composables/useConsole.js'
 
@@ -38,7 +38,7 @@ export default {
                 <div>
                   <strong>{{ m.label }}</strong>
                   <span class="muted"> — {{ moduleDir('middleware', m.name) }}</span>
-                  <span v-if="!isLocalDocker && isMultiNode" class="node-target">@ {{ moduleTargetLabel(m.name, 'middleware') }}</span>
+                  <span v-if="isMultiNode" class="node-target">@ {{ moduleTargetLabel(m.name, 'middleware') }}</span>
                   <span v-if="fieldModuleStatus[m.name]" class="badge green" style="margin-left:0.5rem">{{ fieldModuleStatus[m.name] }}</span>
                 </div>
                 <div class="module-deploy-actions">

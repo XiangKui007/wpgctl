@@ -23,12 +23,14 @@ import (
 
 // SiteConfig 现场站点配置（唯一配置源）。
 type SiteConfig struct {
-	Site       SiteInfo            `yaml:"site" json:"site"`
-	Nodes      []Node              `yaml:"nodes" json:"nodes"`
-	Profiles   []string            `yaml:"profiles" json:"profiles"`
-	Middleware MiddlewareConfig    `yaml:"middleware" json:"middleware"`
-	Overrides  map[string]Override `yaml:"overrides,omitempty" json:"overrides,omitempty"`
-	Paths      PathsConfig         `yaml:"paths" json:"paths"`
+	Site       SiteInfo         `yaml:"site" json:"site"`
+	Nodes      []Node           `yaml:"nodes" json:"nodes"`
+	Profiles   []string         `yaml:"profiles" json:"profiles"`
+	Middleware MiddlewareConfig `yaml:"middleware" json:"middleware"`
+	// Monitor 监控采集范围。中心机仍用 nodes[].services 里的 monitor，这里只记采集端。
+	Monitor   MonitorDeploy       `yaml:"monitor,omitempty" json:"monitor,omitempty"`
+	Overrides map[string]Override `yaml:"overrides,omitempty" json:"overrides,omitempty"`
+	Paths     PathsConfig         `yaml:"paths" json:"paths"`
 	// FetchBaseURL 公司侧拉包地址，可选。
 	FetchBaseURL string `yaml:"fetchBaseUrl,omitempty" json:"fetchBaseUrl,omitempty"`
 }
@@ -49,10 +51,17 @@ type Node struct {
 	Services []string `yaml:"services,omitempty" json:"services,omitempty"`
 }
 
-// SSHAuth SSH 连接参数（密码运行时交互或密钥，不强制写入文件）。
+// SSHAuth SSH 连接参数。密码写入 site.yaml，重新打开向导时回填到对应机器。
 type SSHAuth struct {
-	User string `yaml:"user" json:"user"`
-	Port int    `yaml:"port" json:"port"`
+	User     string `yaml:"user" json:"user"`
+	Port     int    `yaml:"port" json:"port"`
+	Password string `yaml:"password,omitempty" json:"password,omitempty"`
+}
+
+// MonitorDeploy 监控采集端选择。Agents 部署 node 与 cadvisor；Exporters 为 kafka/mysql/pgsql/redis。
+type MonitorDeploy struct {
+	Agents    []string `yaml:"agents,omitempty" json:"agents,omitempty"`
+	Exporters []string `yaml:"exporters,omitempty" json:"exporters,omitempty"`
 }
 
 // MiddlewareConfig 中间件连接参数，渲染进全部 env / nacos 模板。
@@ -103,9 +112,9 @@ type Override struct {
 
 // PathsConfig 现场路径规划。
 type PathsConfig struct {
-	Workspace        string `yaml:"workspace" json:"workspace"`           // 挂载盘工作簿根，现场默认 /workspace
-	Logs             string `yaml:"logs,omitempty" json:"logs,omitempty"` // 可选；各模块 compose 通常已挂载日志目录
-	NginxHTML        string `yaml:"nginxHtml,omitempty" json:"nginxHtml,omitempty"` // 可选；缺省等于 nginx 模块下的 html，向导不再单独填写
+	Workspace        string `yaml:"workspace" json:"workspace"`                                   // 挂载盘工作簿根，现场默认 /workspace
+	Logs             string `yaml:"logs,omitempty" json:"logs,omitempty"`                         // 可选；各模块 compose 通常已挂载日志目录
+	NginxHTML        string `yaml:"nginxHtml,omitempty" json:"nginxHtml,omitempty"`               // 已停用：表单保存时清空。前端目录是 Nginx 模块下的 html
 	Waterwork        string `yaml:"waterwork,omitempty" json:"waterwork,omitempty"`               // 市政水厂包目录，由现场浏览选择
 	IntelligentModel string `yaml:"intelligentModel,omitempty" json:"intelligentModel,omitempty"` // 模型服务包目录，由现场浏览选择
 }

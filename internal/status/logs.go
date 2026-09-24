@@ -22,7 +22,7 @@ type LogsOptions struct {
 	Tail        int // 跟随开始前先吐出的末尾行数；≤0 时用 200
 }
 
-// LogPuller 复用本机 Docker 或一条 SSH 连接，执行 docker logs -f。
+// LogPuller 复用本机或一条 SSH 连接，执行 docker logs -f。
 type LogPuller struct {
 	local     *dockerx.Runner
 	remote    *sshx.Session

@@ -40,6 +40,18 @@ func TestJudgePickLevel_MiddlewareTooDeep(t *testing.T) {
 	if h.Level != "up" {
 		t.Fatalf("level=%s %+v", h.Level, h)
 	}
+	h = judgePickLevel("middlewareRoot", `/workspace/middleware/middleware/mysql/data`, []FSEntry{
+		{Name: "ibdata1", Path: `/workspace/middleware/middleware/mysql/data/ibdata1`},
+	})
+	if h.Level != "up" {
+		t.Fatalf("nested data level=%s %+v", h.Level, h)
+	}
+	h = judgePickLevel("middlewareRoot", `/workspace/middleware/middleware/docker_package`, []FSEntry{
+		{Name: "offline_install_docker.sh", Path: `/workspace/middleware/middleware/docker_package/offline_install_docker.sh`},
+	})
+	if h.Level != "up" {
+		t.Fatalf("docker_package level=%s %+v", h.Level, h)
+	}
 }
 
 func TestJudgePickLevel_PackageManifest(t *testing.T) {

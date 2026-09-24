@@ -14,7 +14,6 @@ import {
   emptyFieldStepDone,
   fieldModules,
   fieldStepDefs,
-  localStepDefs,
   moduleDefs,
   NODE_SERVICE_GROUPS,
   PERSIST_FIELD_KEYS,
@@ -91,7 +90,10 @@ const siteFileExists = ref(false)
 
 const deployTopology = ref('multi')
 const sshCreds = reactive({ password: '', keyPath: '' })
-const sshCredsReady = computed(() => !!(sshCreds.password || sshCreds.keyPath))
+const sshCredsReady = computed(() => {
+  if (sshCreds.password || sshCreds.keyPath) return true
+  return (siteForm.nodes || []).some((n) => String(n.sshPassword || '').trim())
+})
 const sshPanelOpen = ref(false)
 /** 多机分发：目标机缺目录时是否自动上传 / 是否强制覆盖。 */
 const remoteSync = reactive({ syncFiles: true, forceSync: false })
@@ -101,14 +103,14 @@ const workspaceProbe = ref(null)
 const workspaceMsg = ref('')
 const workspaceBusy = ref('')
 
-/** 开始前：用户选择的父目录。Linux 默认 `/`，本机 Docker 默认 `D:/`。 */
+/** 开始前：用户选择的父目录。现场默认 `/`。 */
 function defaultParentPath() {
-  return isLocalDocker.value ? 'D:/' : '/'
+  return '/'
 }
 
-/** 工作簿根：父目录下的 workspace。Linux 为 /workspace，本机 Docker 为 D:/workspace。 */
+/** 工作簿根：父目录下的 workspace。现场默认 /workspace。 */
 function defaultWorkspacePath() {
-  return isLocalDocker.value ? 'D:/workspace' : '/workspace'
+  return '/workspace'
 }
 
 /** 根据开始前输入框解析将要创建/使用的工作簿路径。 */
@@ -117,10 +119,6 @@ const resolvedWorkbookPath = computed(() =>
 )
 
 function goDeployEntry() {
-  if (isLocalDocker.value) {
-    goWizard()
-    return
-  }
   const stayingInWizard = view.value === 'wizard'
   loadSite().finally(() => {
     if (siteFileExists.value && (maxReachedStep.value > 0 || fieldStepDone.site)) {
@@ -173,6 +171,13 @@ async function initWorkspaceAndEnter() {
 /**
  * 多机模式下返回服务分配的目标机器（非主控机时才返回，主控机/单机返回 null，表示本地执行）。
  */
+/** sshPasswordForIP 取某台机器在表单里的 SSH 密码，没有则用统一密码。 */
+function sshPasswordForIP(ip) {
+  const key = String(ip || '').trim()
+  const n = (siteForm.nodes || []).find((item) => String(item.ip || '').trim() === key)
+  return (n && n.sshPassword) || sshCreds.password || ''
+}
+
 function remoteTargetFor(serviceId) {
   if (!isMultiNode.value) return null
   const idx = serviceAssignments[serviceId]
@@ -187,7 +192,7 @@ function remoteFields(serviceId) {
   if (!n) return {}
   return {
     node: n.name || n.ip,
-    sshPassword: sshCreds.password || undefined,
+    sshPassword: n.sshPassword || sshCreds.password || undefined,
     sshKeyPath: sshCreds.keyPath || undefined,
     syncFiles: remoteSync.syncFiles,
     forceSync: remoteSync.forceSync,
@@ -198,7 +203,7 @@ function logRemoteHint(serviceId) {
   const n = remoteTargetFor(serviceId)
   if (!n) return
   jobLogs.value.push(`→ 目标机器 ${n.name} (${n.ip})，通过 SSH 分发执行`)
-  if (!sshCredsReady.value) {
+  if (!n.sshPassword && !sshCredsReady.value) {
     siteError.value = `目标机器 ${n.name} 需要 SSH 凭据：未填写时将尝试主控机环境变量 WPGCTL_SSH_PASSWORD / WPGCTL_SSH_KEY，失败请展开「SSH 分发到从机」填写后重试`
     sshPanelOpen.value = true
   } else {
@@ -240,7 +245,8 @@ const siteForm = reactive({
     },
     kafka: { host: '127.0.0.1', port: 9092 },
   },
-  paths: { workspace: '', nginxHtml: '', waterwork: '', intelligentModel: '' },
+  paths: { workspace: '', waterwork: '', intelligentModel: '' },
+  monitor: { agents: null, exporters: null },
 })
 
 const selectedModules = reactive({
@@ -353,7 +359,6 @@ function resetSiteFormBlank() {
   siteForm.middleware.kafka.host = '127.0.0.1'
   siteForm.middleware.kafka.port = 9092
   siteForm.paths.workspace = ''
-  siteForm.paths.nginxHtml = ''
   siteForm.paths.waterwork = ''
   siteForm.paths.intelligentModel = ''
   applyDefaultCreds(true)
@@ -400,7 +405,7 @@ const deployableMiddlewareModules = computed(() =>
 )
 
 const deployableBusinessModules = computed(() =>
-  fieldModules.business.filter((m) => isServiceEnabled(m.name)),
+  fieldModules.business.filter((m) => m.name !== 'monitor' && isServiceEnabled(m.name)),
 )
 
 /** 已填目录且已勾选的市政/模型部署项：水厂拆成 center → device，再跟模型。 */
@@ -512,7 +517,6 @@ const reportId = ref('')
 
 const settings = reactive({
   operator: '',
-  privacyMode: false,
   scenario: 'linux',
   advancedMode: false,
 })
@@ -749,14 +753,6 @@ const siteLoaded = computed(() => !!site.value)
 const reportUrl = computed(() =>
   apiPath(reportId.value ? `/api/report?id=${encodeURIComponent(reportId.value)}` : '/api/report'),
 )
-const isLocalDocker = computed(() => settings.scenario === 'windows')
-
-const nginxHtmlPath = computed(() => {
-  const base = fieldPaths.nginxDir
-  if (!base) return ''
-  return joinPath(base, 'html')
-})
-
 const nginxWebConfPath = computed(() => {
   const base = fieldPaths.nginxDir
   if (!base) return 'middle/middle/nginx/conf/conf.d/http-web-8877.conf'
@@ -764,46 +760,41 @@ const nginxWebConfPath = computed(() => {
 })
 /** 首页主文案：突出快速部署、少命令、好上手，而不是审计/回滚 SOP。 */
 const heroLead = computed(() =>
-  isLocalDocker.value
-    ? '本机 Docker 联调：按向导快速跑通部署，少配环境、少记命令。'
-    : 'Linux 现场交付：跟着向导完成安装与部署，简单好用，把现场效率提上来。',
+  'Linux 现场交付｜向导式标准化部署，降低现场操作风险，快速落地水厂项目',
 )
-const modeHint = computed(() =>
-  isLocalDocker.value
-    ? '已开启「本机 Docker」。需要回到现场交付时，关闭顶栏或首页开关即可。'
-    : '默认现场 Linux 交付。需要在本机用 Docker Desktop 联调时，打开「本机 Docker」开关。',
-)
-const platformHint = computed(() => {
-  if (isLocalDocker.value) {
-    return runtimeOS.value === 'windows'
-      ? '当前机器是 Windows，适合 Docker Desktop 本机联调。'
-      : '本机 Docker 联调已开启；请确保本机 Docker 可用。'
-  }
-  if (runtimeOS.value === 'linux') {
-    return '当前是 Linux，可直接作为现场主控机执行完整交付。'
-  }
-  if (runtimeOS.value === 'windows') {
-    return '默认按现场 Linux 交付引导。若要在本机联调，请打开「本机 Docker」。'
-  }
-  return '默认 Linux 现场交付；可用开关切换为本机 Docker 联调。'
+const siteNodeCount = computed(() => (siteForm.nodes || []).length)
+const lastActionText = computed(() => {
+  const list = deployments.value || []
+  const row = list[list.length - 1]
+  if (!row) return '无'
+  return row.title || row.action || '无'
 })
+const homeTipVisible = ref(sessionStorage.getItem('wpgctl-home-tip') !== '0')
+function dismissHomeTip() {
+  homeTipVisible.value = false
+  sessionStorage.setItem('wpgctl-home-tip', '0')
+}
+const modeHint = computed(() => '默认现场 Linux 交付。')
+/** 首页「Linux 现场交付」标题下的说明。 */
+const platformHint = computed(
+  () => '向导式 Linux 现场部署，标准化交付流程，降低实施门槛，保障交付质量。',
+)
 const envChipText = computed(() => {
-  const modeTag = isLocalDocker.value ? '本机' : '现场'
   const osTag = runtimeOS.value === 'windows' ? 'Windows' : runtimeOS.value ? 'Linux' : ''
   let dockerTag = ''
-  if (dockerOk.value === true) dockerTag = runtimeOS.value === 'windows' ? '本机 Desktop 就绪' : '本机 Docker 就绪'
-  else if (dockerOk.value === false) dockerTag = runtimeOS.value === 'windows' ? '本机 Desktop 未就绪' : '本机 Docker 未就绪'
-  return [modeTag, osTag, dockerTag].filter(Boolean).join(' · ')
+  if (dockerOk.value === true) dockerTag = 'Docker 就绪'
+  else if (dockerOk.value === false) dockerTag = 'Docker 未就绪'
+  return ['现场', osTag, dockerTag].filter(Boolean).join(' · ')
 })
 
-const wizardStepDefs = computed(() => (isLocalDocker.value ? localStepDefs : fieldStepDefs))
+const wizardStepDefs = computed(() => fieldStepDefs)
 
 const currentStepPurpose = computed(() => wizardStepDefs.value[wizardStep.value]?.purpose || '')
 
 const primaryNodeIP = computed(() => siteForm.nodes[0]?.ip || '127.0.0.1')
 
 const isMultiNode = computed(
-  () => !isLocalDocker.value && deployTopology.value === 'multi' && siteForm.nodes.length > 1,
+  () => deployTopology.value === 'multi' && siteForm.nodes.length > 1,
 )
 
 /**
@@ -811,7 +802,7 @@ const isMultiNode = computed(
  * @returns {{ value: string, label: string }[]}
  */
 const logNodeOptions = computed(() => {
-  const opts = [{ value: 'local', label: '本机 Docker' }]
+  const opts = [{ value: 'local', label: '本机' }]
   const seen = new Set(['local'])
   const add = (ip, name) => {
     const v = String(ip || '').trim()
@@ -841,12 +832,6 @@ const isRemoteLogNode = computed(() => {
 
 function isStepDone(key) {
   if (key === 'site') return fieldStepDone.site
-  if (isLocalDocker.value) {
-    if (key === 'precheck') return precheckDone.value && !precheckBlocked.value
-    if (key === 'init') return initDone.value
-    if (key === 'deploy') return deployDone.value
-    return false
-  }
   return !!fieldStepDone[key]
 }
 
@@ -873,7 +858,7 @@ function stepTabClass(i) {
 
 async function prepareSiteStep({ requireDocker = false } = {}) {
   if (siteEditMode.value === 'form') {
-    if (!isLocalDocker.value) ensureWorkspaceRoot()
+    ensureWorkspaceRoot()
     await saveSiteFormOnly()
   } else {
     await api('/api/site', {
@@ -899,7 +884,7 @@ function applyWizardStep(i) {
   siteError.value = ''
   wizardStep.value = i
   maxReachedStep.value = Math.max(maxReachedStep.value, i)
-  if (i === 7 && !isLocalDocker.value) runVerify()
+  if (i === 7) runVerify()
 }
 
 async function goToStep(i, opts = {}) {
@@ -908,9 +893,8 @@ async function goToStep(i, opts = {}) {
   const savingFromSite =
     i > wizardStep.value &&
     wizardStep.value === 0 &&
-    !fieldStepDone.site &&
-    !isLocalDocker.value
-  if (!isLocalDocker.value && siteHydrated && !savingFromSite) {
+    !fieldStepDone.site
+  if (siteHydrated && !savingFromSite) {
     await refreshSitePresence()
     if (!siteFileExists.value && i > 0) {
       siteError.value = 'site.yaml 已不存在，请从①重新保存配置。'
@@ -942,9 +926,7 @@ async function goToStep(i, opts = {}) {
         siteError.value = '任务进行中，请稍后再切换步骤'
       } else {
         const prev = wizardStepDefs.value[i - 1]
-        if (wizardStep.value === 0 && !fieldStepDone.site && isLocalDocker.value) {
-          siteError.value = '请先点击下方「下一步：环境体检」保存站点配置'
-        } else if (prev) {
+        if (prev) {
           siteError.value = `请先完成「${prev.title}」后再进入（或点击该步底部「就绪 / 下一步」）`
         } else {
           siteError.value = '请先完成上一步后再进入'
@@ -1013,7 +995,6 @@ async function pruneMissingLocalPaths() {
     form.manifest,
     siteForm.paths.waterwork,
     siteForm.paths.intelligentModel,
-    siteForm.paths.nginxHtml,
     ...zips,
     ...sqls,
   ])
@@ -1027,7 +1008,6 @@ async function pruneMissingLocalPaths() {
   if (!keep(form.manifest)) form.manifest = ''
   if (!keep(siteForm.paths.waterwork)) siteForm.paths.waterwork = ''
   if (!keep(siteForm.paths.intelligentModel)) siteForm.paths.intelligentModel = ''
-  if (!keep(siteForm.paths.nginxHtml)) siteForm.paths.nginxHtml = ''
   fieldPaths.nacosConfigZips = zips.filter((p) => ok.has(p)).join('\n')
   sqlApplyFiles.value = sqls.filter((p) => ok.has(p))
 }
@@ -1036,8 +1016,7 @@ async function loadSettings() {
   try {
     const st = await api('/api/settings')
     settings.operator = st.operator || ''
-    settings.privacyMode = !!st.privacyMode
-    settings.scenario = st.scenario === 'windows' ? 'windows' : 'linux'
+    settings.scenario = 'linux'
     settings.advancedMode = !!st.advancedMode
     applyFieldPaths(st.fieldPaths)
     applyUISession(st.uiSession, { includeProgress: false })
@@ -1072,8 +1051,7 @@ async function saveSettings() {
       body: JSON.stringify({
         mode: 'implementer',
         operator: settings.operator,
-        privacyMode: settings.privacyMode,
-        scenario: settings.scenario,
+        scenario: 'linux',
         advancedMode: settings.advancedMode,
         fieldPaths: collectFieldPaths(),
         uiSession: collectUISession(),
@@ -1085,15 +1063,6 @@ async function saveSettings() {
   } catch (e) {
     console.warn('save settings failed', e)
   }
-}
-
-async function setScenario(scenario) {
-  settings.scenario = scenario === 'windows' ? 'windows' : 'linux'
-  await saveSettings()
-}
-
-async function onLocalDockerToggle(checked) {
-  await setScenario(checked ? 'windows' : 'linux')
 }
 
 async function loadPackages() {
@@ -1231,6 +1200,9 @@ function fillSiteForm(parsed) {
   const kafka = m.kafka || m.Kafka || {}
   const pgsql = m.pgsql || m.PgSQL || m.Pgsql || {}
 
+  const mon = parsed.monitor || parsed.Monitor || {}
+  siteForm.monitor.agents = mon.agents || mon.Agents || null
+  siteForm.monitor.exporters = mon.exporters || mon.Exporters || null
   siteForm.site.name = siteMeta.name || siteMeta.Name || ''
   siteForm.site.code = siteMeta.code || siteMeta.Code || ''
   for (const mod of moduleDefs) {
@@ -1253,6 +1225,7 @@ function fillSiteForm(parsed) {
       )
       row.sshUser = ssh.user || ssh.User || 'root'
       row.sshPort = ssh.port || ssh.Port || 22
+      row.sshPassword = ssh.password || ssh.Password || ''
       return row
     })
     deployTopology.value = nodes.length > 1 ? 'multi' : 'single'
@@ -1299,16 +1272,14 @@ function fillSiteForm(parsed) {
   siteForm.middleware.kafka.host = kafka.host || kafka.Host || siteForm.middleware.kafka.host
   siteForm.middleware.kafka.port = kafka.port || kafka.Port || 9092
   siteForm.paths.workspace = paths.workspace || paths.Workspace || ''
-  siteForm.paths.nginxHtml = paths.nginxHtml || paths.NginxHTML || paths.NginxHtml || ''
   siteForm.paths.waterwork = paths.waterwork || paths.Waterwork || ''
   siteForm.paths.intelligentModel = paths.intelligentModel || paths.IntelligentModel || ''
 }
 
-/** 脱敏回显保持空串（保存时沿用文件原值）；缺省则填交付默认密码 */
+/** 文件里已有密码则回填；没有或曾被打成 ****** 时用交付默认密码，便于写回 site.yaml。 */
 function resolveLoadedPassword(raw, fallback) {
-  if (raw === '******') return ''
-  if (raw) return raw
-  return fallback
+  if (!raw || raw === '******') return fallback
+  return raw
 }
 
 function applyDefaultCreds(force = false) {
@@ -1339,17 +1310,12 @@ function switchSiteMode(mode) {
 
 function currentProfiles() {
   const out = []
-  if (isLocalDocker.value) {
-    // 本机联调仍走 manifest 一键流程，沿用勾选框
-    out.push(...moduleDefs.map((m) => m.id).filter((id) => selectedModules[id]))
-  } else {
-    // 现场向导：由「分配服务」推导；单机默认全部
-    for (const [svc, profile] of Object.entries(SERVICE_PROFILE)) {
-      if (svc === 'waterwork' || svc === 'intelligent-model') continue
-      if (isServiceEnabled(svc)) out.push(profile)
-    }
-    if (!out.includes('platform')) out.push('platform')
+  // 由「分配服务」推导；单机默认全部
+  for (const [svc, profile] of Object.entries(SERVICE_PROFILE)) {
+    if (svc === 'waterwork' || svc === 'intelligent-model') continue
+    if (isServiceEnabled(svc)) out.push(profile)
   }
+  if (!out.includes('platform')) out.push('platform')
   if ((siteForm.paths.waterwork || '').trim() && isServiceEnabled('waterwork')) {
     out.push('waterwork')
   }
@@ -1360,7 +1326,7 @@ function currentProfiles() {
 }
 
 function buildFormNodes() {
-  if (deployTopology.value === 'single' || isLocalDocker.value) {
+  if (deployTopology.value === 'single') {
     const n =
       siteForm.nodes[0] ||
       defaultNode('app-node', primaryNodeIP.value, ALL_SINGLE_ROLES, ALL_SERVICE_IDS)
@@ -1368,7 +1334,11 @@ function buildFormNodes() {
       {
         name: n.name || 'app-node',
         ip: n.ip || primaryNodeIP.value,
-        ssh: { user: n.sshUser || 'root', port: Number(n.sshPort) || 22 },
+        ssh: {
+          user: n.sshUser || 'root',
+          port: Number(n.sshPort) || 22,
+          password: n.sshPassword || sshCreds.password || undefined,
+        },
         roles: ALL_SINGLE_ROLES,
         services: ALL_SERVICE_IDS,
       },
@@ -1377,7 +1347,11 @@ function buildFormNodes() {
   return siteForm.nodes.map((n, i) => ({
     name: (n.name || '').trim() || `node${i + 1}`,
     ip: n.ip,
-    ssh: { user: n.sshUser || 'root', port: Number(n.sshPort) || 22 },
+    ssh: {
+      user: n.sshUser || 'root',
+      port: Number(n.sshPort) || 22,
+      password: n.sshPassword || sshCreds.password || undefined,
+    },
     roles: rolesForServices(assignedServicesForNode(i)),
     services: assignedServicesForNode(i),
   }))
@@ -1545,7 +1519,7 @@ function buildFormPayload() {
         port: Number(siteForm.middleware.nacos.port) || 8848,
         namespace: ns,
         username: siteForm.middleware.nacos.username || DEFAULT_CREDS.nacosUser,
-        password: siteForm.middleware.nacos.password,
+        password: siteForm.middleware.nacos.password || DEFAULT_CREDS.nacosPassword,
       },
       mysql: siteForm.middleware.mysql.disabled
         ? { disabled: true }
@@ -1553,7 +1527,7 @@ function buildFormPayload() {
             host: siteForm.middleware.mysql.host,
             port: Number(siteForm.middleware.mysql.port) || 3306,
             user: siteForm.middleware.mysql.user || DEFAULT_CREDS.mysqlUser,
-            password: siteForm.middleware.mysql.password,
+            password: siteForm.middleware.mysql.password || DEFAULT_CREDS.mysqlPassword,
           },
       pgsql: {
         host:
@@ -1563,12 +1537,12 @@ function buildFormPayload() {
             : siteForm.middleware.mysql.host),
         port: Number(siteForm.middleware.pgsql.port) || DEFAULT_CREDS.pgsqlPort,
         user: siteForm.middleware.pgsql.user || DEFAULT_CREDS.pgsqlUser,
-        password: siteForm.middleware.pgsql.password,
+        password: siteForm.middleware.pgsql.password || DEFAULT_CREDS.pgsqlPassword,
       },
       redis: {
         host: siteForm.middleware.redis.host,
         port: Number(siteForm.middleware.redis.port) || 6377,
-        password: siteForm.middleware.redis.password,
+        password: siteForm.middleware.redis.password || DEFAULT_CREDS.redisPassword,
       },
       kafka: {
         host: siteForm.middleware.kafka.host,
@@ -1577,9 +1551,12 @@ function buildFormPayload() {
     },
     paths: {
       workspace: siteForm.paths.workspace,
-      nginxHtml: nginxHtmlPath.value || siteForm.paths.nginxHtml || undefined,
       waterwork: siteForm.paths.waterwork || undefined,
       intelligentModel: siteForm.paths.intelligentModel || undefined,
+    },
+    monitor: {
+      agents: siteForm.monitor.agents || undefined,
+      exporters: siteForm.monitor.exporters || undefined,
     },
   }
 }
@@ -1609,7 +1586,7 @@ function siteFormReadyToPersist() {
   } catch {
     return false
   }
-  if (isLocalDocker.value || deployTopology.value === 'single') {
+  if (deployTopology.value === 'single') {
     if (!siteForm.nodes[0]?.ip?.trim()) return false
   }
   const mw = siteForm.middleware
@@ -1620,7 +1597,6 @@ function siteFormReadyToPersist() {
   if (!(mw.pgsql.user || '').trim() || !(mw.pgsql.password || '').trim()) return false
   if (!(mw.redis.host || '').trim() || !(mw.redis.password || '').trim()) return false
   if (!(mw.kafka.host || '').trim()) return false
-  if (isLocalDocker.value && !(siteForm.paths.workspace || '').trim()) return false
   return true
 }
 
@@ -1629,22 +1605,17 @@ const siteSubStep = ref(0)
 const siteSubStepReached = ref(0)
 
 const siteSubSteps = computed(() => {
-  const local = isLocalDocker.value
-  const multi = !local && deployTopology.value === 'multi'
+  const multi = deployTopology.value === 'multi'
   const steps = [
     {
       key: 'project',
       title: '项目信息',
-      desc: local
-        ? '项目名称、编码与业务模块。'
-        : '项目名称与编码。',
+      desc: '项目名称与编码。',
     },
     {
       key: 'machines',
-      title: local ? '本机节点' : '机器规划',
-      desc: local
-        ? '本机 Docker 访问 IP。'
-        : multi
+      title: '机器规划',
+      desc: multi
           ? '添加机器并分配服务。第一台为主控。'
           : '全部服务跑在这一台。',
     },
@@ -1656,9 +1627,7 @@ const siteSubSteps = computed(() => {
     {
       key: 'paths',
       title: '目录与安装包',
-      desc: local
-        ? 'Release 包目录与 workspace。'
-        : 'middleware / platform 根目录与 Docker 离线包。',
+      desc: 'middleware / platform 根目录与 Docker 离线包。',
     },
     {
       key: 'confirm',
@@ -1702,7 +1671,7 @@ function validateSiteSubStep(i) {
     return
   }
   if (key === 'machines') {
-    if (isLocalDocker.value || deployTopology.value === 'single') {
+    if (deployTopology.value === 'single') {
       if (!siteForm.nodes[0]?.ip?.trim()) throw new Error('第 2 小步：请填写机器 IP（可点「自动获取本机 IP」）')
       return
     }
@@ -1722,10 +1691,7 @@ function validateSiteSubStep(i) {
     return
   }
   if (key === 'paths') {
-    if (isLocalDocker.value && !siteForm.paths.workspace?.trim()) {
-      throw new Error('请填写 workspace 路径')
-    }
-    if (!isLocalDocker.value) ensureWorkspaceRoot()
+    ensureWorkspaceRoot()
   }
 }
 
@@ -1736,7 +1702,6 @@ function goSiteSubStepByKey(key) {
 
 /** ensureWorkspaceRoot 现场把「/」或空路径收成工作簿根 /workspace。 */
 function ensureWorkspaceRoot() {
-  if (isLocalDocker.value) return
   const ws = (siteForm.paths.workspace || '').trim().replace(/\\/g, '/')
   if (!ws || ws === '/' || !isWorkbookRoot(ws)) {
     siteForm.paths.workspace = defaultWorkspacePath()
@@ -1766,7 +1731,7 @@ function nextSiteSubStep() {
     siteError.value = e.message
     return
   }
-  if (siteSubSteps.value[siteSubStep.value]?.key === 'machines' && !isLocalDocker.value) {
+  if (siteSubSteps.value[siteSubStep.value]?.key === 'machines') {
     // 进入中间件小步前，按机器规划同步各中间件 Host
     if (deployTopology.value === 'multi') syncServiceAssignments()
     else syncSingleNodeHosts()
@@ -1800,7 +1765,7 @@ async function saveSite() {
   try {
     const useForm = siteEditMode.value === 'form'
     if (useForm) {
-      if (!isLocalDocker.value) ensureWorkspaceRoot()
+      ensureWorkspaceRoot()
       validateNodePlan()
       syncServiceAssignments(false)
       await api('/api/site/form', {
@@ -1980,7 +1945,6 @@ async function openPicker(target, mode) {
     (target === 'platformRoot' && fieldPaths.platformRoot) ||
     (target === 'nginxDir' && fieldPaths.nginxDir) ||
     (target === 'pathsWorkspace' && siteForm.paths.workspace) ||
-    (target === 'pathsNginxHtml' && siteForm.paths.nginxHtml) ||
     (target === 'waterworkDir' && siteForm.paths.waterwork) ||
     (target === 'intelligentModelDir' && siteForm.paths.intelligentModel) ||
     (target === 'nacosConfigZips' && (nacosConfigZipList.value[0] || fieldPaths.middlewareRoot)) ||
@@ -2022,7 +1986,6 @@ function confirmPicker(path) {
   if (picker.target === 'platformRoot') fieldPaths.platformRoot = path
   if (picker.target === 'nginxDir') fieldPaths.nginxDir = path
   if (picker.target === 'pathsWorkspace') siteForm.paths.workspace = path
-  if (picker.target === 'pathsNginxHtml') siteForm.paths.nginxHtml = path
   if (picker.target === 'waterworkDir') siteForm.paths.waterwork = path
   if (picker.target === 'intelligentModelDir') siteForm.paths.intelligentModel = path
   if (picker.target === 'fetchLocal') fetchForm.local = path
@@ -2080,7 +2043,7 @@ function isHintEnter(e) {
 }
 
 /**
- * isHintMark 当前条目是到层标志（模块文件夹或 manifest.yaml）。
+ * isHintMark 当前条目说明已经到了该选的那一层（模块文件夹或 manifest.yaml）。
  * @param {object} e 路径选择器条目
  * @returns {boolean}
  */
@@ -2088,41 +2051,18 @@ function isHintMark(e) {
   return hintNames(picker.hint?.marks).includes(pickerEntryBase(e))
 }
 
-function pickerHintType(level) {
-  if (level === 'ready') return 'success'
-  if (level === 'deeper') return 'warning'
-  if (level === 'up') return 'error'
-  return 'info'
-}
-
 async function goWizard() {
   await loadSite()
-  if (!isLocalDocker.value) ensureWorkspaceRoot()
+  ensureWorkspaceRoot()
   view.value = 'wizard'
 }
 
 async function nextFromSite() {
   busy.value = true
   try {
-    if (isLocalDocker.value) {
-      if (siteEditMode.value === 'form') {
-        await saveSiteFormOnly()
-      }
-      const summary = await api('/api/confirm-summary', {
-        method: 'POST',
-        body: JSON.stringify({ package: form.package }),
-      })
-      const ok = await askConfirm('部署前确认', summary.text || '确认进入环境体检？')
-      if (!ok) return
-      fieldStepDone.site = true
-      applyWizardStep(1)
-      precheckDone.value = false
-      precheckItems.value = []
-    } else {
-      const ok = await prepareSiteStep()
-      if (!ok) return
-      applyWizardStep(1)
-    }
+    const ok = await prepareSiteStep()
+    if (!ok) return
+    applyWizardStep(1)
     jobLogs.value = []
   } catch (e) {
     siteError.value = e.message
@@ -2196,7 +2136,7 @@ async function refreshModuleDirs(phase) {
     : phase === 'database' ? fieldModules.database
     : fieldModules.middleware
   for (const m of list) delete resolvedModuleDirs[`${phase}/${m.name}`]
-  if (!root || isLocalDocker.value) return
+  if (!root) return
   await Promise.all(
     list.map(async (m) => {
       const p = await resolveNestedModulePath(root, m.name)
@@ -2207,7 +2147,33 @@ async function refreshModuleDirs(phase) {
   )
 }
 
-const refreshPlatformDirsSoon = debounce(() => refreshModuleDirs('business'), 400)
+const monitorLayout = ref({ dir: '', exists: false, files: [], error: '' })
+
+/** refreshMonitorLayout 按 platform 根解析 monitor 目录和其中的 compose / .env / prometheus.yml。 */
+async function refreshMonitorLayout() {
+  const root = (fieldPaths.platformRoot || '').trim()
+  if (!root) {
+    monitorLayout.value = { dir: '', exists: false, files: [], error: '' }
+    return
+  }
+  try {
+    const data = await api('/api/module/monitor/layout?root=' + encodeURIComponent(root))
+    if ((fieldPaths.platformRoot || '').trim() !== root) return
+    monitorLayout.value = {
+      dir: data.dir || '',
+      exists: !!data.exists,
+      files: data.files || [],
+      error: data.error || '',
+    }
+  } catch (e) {
+    monitorLayout.value = { dir: '', exists: false, files: [], error: e.message }
+  }
+}
+
+const refreshPlatformDirsSoon = debounce(() => {
+  refreshModuleDirs('business')
+  refreshMonitorLayout()
+}, 400)
 const refreshMiddlewareDirsSoon = debounce(() => {
   refreshModuleDirs('database')
   refreshModuleDirs('middleware')
@@ -2240,7 +2206,7 @@ function prevKey(key) {
 }
 
 async function saveSiteFormOnly() {
-  if (!isLocalDocker.value) ensureWorkspaceRoot()
+  ensureWorkspaceRoot()
   const payload = buildFormPayload()
   await api('/api/site/form', { method: 'PUT', body: JSON.stringify(payload) })
   markSiteFileExists()
@@ -2323,6 +2289,22 @@ async function openEnvEditor(phase, name) {
   siteSaveMsg.value = `编辑 ${fileEditor.path || envPath}（保存后生效；部署时会按需再改 IP）`
 }
 
+/**
+ * openComposeEditor 打开模块目录下的 docker-compose（yml / yaml 都能找到）。
+ * @param {string} phase business 等阶段
+ * @param {string} name 模块名
+ */
+async function openComposeEditor(phase, name) {
+  const dir = await resolveModuleDir(phase, name)
+  if (!dir) {
+    siteError.value = '请先填写根目录'
+    return
+  }
+  const composePath = joinPath(dir, 'docker-compose.yaml')
+  await loadTextFile(composePath, { find: true })
+  siteSaveMsg.value = `编辑 ${fileEditor.path || composePath}（保存后写回该文件）`
+}
+
 async function openStandaloneEnvEditor(pathKey, dirName) {
   const dir = (siteForm.paths[pathKey] || '').trim()
   if (!dir) {
@@ -2332,6 +2314,24 @@ async function openStandaloneEnvEditor(pathKey, dirName) {
   const envPath = dirName ? joinPath(joinPath(dir, dirName), '.env') : joinPath(dir, '.env')
   await loadTextFile(envPath, { find: true })
   siteSaveMsg.value = `编辑 ${fileEditor.path || envPath}（保存后生效；部署时会按站点同步改写 center/device 两份 .env）`
+}
+
+/**
+ * openStandaloneComposeEditor 打开市政/模型包下的 docker-compose。
+ * @param {string} pathKey siteForm.paths 里的目录键
+ * @param {string} [dirName] 子目录，如 waterwork-center
+ */
+async function openStandaloneComposeEditor(pathKey, dirName) {
+  const dir = (siteForm.paths[pathKey] || '').trim()
+  if (!dir) {
+    siteError.value = '请先填写该独立包目录'
+    return
+  }
+  const composePath = dirName
+    ? joinPath(joinPath(dir, dirName), 'docker-compose.yaml')
+    : joinPath(dir, 'docker-compose.yaml')
+  await loadTextFile(composePath, { find: true })
+  siteSaveMsg.value = `编辑 ${fileEditor.path || composePath}（保存后写回该文件）`
 }
 
 function closeFileEditor() {
@@ -2495,6 +2495,128 @@ async function runModuleDeploy(phase, name, patchEnv, opts = {}) {
   }
 }
 
+/** 监控中心 + Prometheus 放 monitor 节点；node/cadvisor 按勾选机器；组件采集跟中间件机器。 */
+async function runMonitorDeploy() {
+  if (!fieldPaths.platformRoot) {
+    siteError.value = '请先填写 platform 根目录'
+    return
+  }
+  const agents = siteForm.monitor.agents?.length
+    ? siteForm.monitor.agents
+    : siteForm.nodes.map((n) => n.ip).filter(Boolean)
+  const exporters = siteForm.monitor.exporters || defaultMonitorExporters()
+  siteForm.monitor.agents = agents
+  siteForm.monitor.exporters = exporters
+  activeJobKey.value = 'monitor-deploy'
+  busy.value = true
+  jobLogs.value = ['开始部署监控…']
+  try {
+    ensureWorkspaceRoot()
+    validateNodePlan()
+    syncServiceAssignments(false)
+    await api('/api/site/form', { method: 'PUT', body: JSON.stringify(buildFormPayload()) })
+    markSiteFileExists()
+    const job = await api('/api/module/monitor', {
+      method: 'POST',
+      body: JSON.stringify({
+        moduleRoot: fieldPaths.platformRoot,
+        agents,
+        exporters,
+        sshPassword: sshCreds.password || undefined,
+        sshKeyPath: sshCreds.keyPath || undefined,
+      }),
+    })
+    const done = await watchJob(job.id, { logPrefix: jobLogs.value })
+    if (done.status !== 'ok') {
+      jobLogs.value.push('ERROR: ' + (done.message || '监控部署失败'))
+    }
+  } catch (e) {
+    jobLogs.value.push('ERROR: ' + e.message)
+  } finally {
+    busy.value = false
+    activeJobKey.value = ''
+  }
+}
+
+/** 解开 otherServices 下的 zip，并展开里面的 tar.zip，然后重新解析目录。 */
+async function expandMonitorServices() {
+  if (!fieldPaths.platformRoot) {
+    siteError.value = '请先填写 platform 根目录'
+    return
+  }
+  activeJobKey.value = 'monitor-expand'
+  busy.value = true
+  jobLogs.value = ['解压 otherServices …']
+  try {
+    const job = await api('/api/module/monitor/expand', {
+      method: 'POST',
+      body: JSON.stringify({ moduleRoot: fieldPaths.platformRoot }),
+    })
+    const done = await watchJob(job.id, { logPrefix: jobLogs.value })
+    if (done.status !== 'ok') {
+      jobLogs.value.push('ERROR: ' + (done.message || '解压失败'))
+      return
+    }
+    await refreshMonitorLayout()
+  } catch (e) {
+    jobLogs.value.push('ERROR: ' + e.message)
+  } finally {
+    busy.value = false
+    activeJobKey.value = ''
+  }
+}
+
+/** 打开监控包里的单个 compose / .env / prometheus.yml。 */
+async function openMonitorFile(path) {
+  if (!path) return
+  await loadTextFile(path, { find: true })
+  siteSaveMsg.value = `编辑 ${fileEditor.path || path}`
+}
+
+/** 按站点改监控地址。only 为空则改 .env、prometheus.yml 和采集 compose。 */
+async function patchMonitorFiles(only) {
+  if (!fieldPaths.platformRoot) {
+    siteError.value = '请先填写 platform 根目录'
+    return
+  }
+  siteError.value = ''
+  try {
+    const data = await api('/api/module/monitor/patch', {
+      method: 'POST',
+      body: JSON.stringify({
+        moduleRoot: fieldPaths.platformRoot,
+        only: only && only.length ? only : undefined,
+      }),
+    })
+    const lines = data.lines || []
+    jobLogs.value = lines
+    notify(lines[0] || '已按站点修改', 'ok')
+    await refreshMonitorLayout()
+  } catch (e) {
+    siteError.value = e.message
+  }
+}
+
+function defaultMonitorExporters() {
+  const out = ['kafka', 'pgsql', 'redis']
+  if (!siteForm.middleware.mysql.disabled) out.push('mysql')
+  return out
+}
+
+function toggleMonitorAgent(ip, on) {
+  const cur = new Set(siteForm.monitor.agents?.length ? siteForm.monitor.agents : siteForm.nodes.map((n) => n.ip))
+  if (on) cur.add(ip)
+  else cur.delete(ip)
+  siteForm.monitor.agents = [...cur]
+}
+
+function toggleMonitorExporter(name, on) {
+  const cur = new Set(siteForm.monitor.exporters || defaultMonitorExporters())
+  if (on) cur.add(name)
+  else cur.delete(name)
+  siteForm.monitor.exporters = [...cur]
+}
+
 /** 把 Kafka 所在机器 IP 同步进表单并写入 site.yaml，供 compose 补丁使用。 */
 async function persistKafkaAdvertiseHost() {
   if (isMultiNode.value) syncServiceAssignments(false)
@@ -2571,7 +2693,7 @@ async function runAllBusinessDeploy() {
       }
       ok++
     }
-    jobLogs.value.push(`平台业务一键部署完成：${ok}/${list.length}`)
+    jobLogs.value.push(`平台业务一键部署完成：${ok}/${list.length}（监控请用下方「部署监控」）`)
     fieldStepDone.business = true
   } finally {
     busy.value = false
@@ -3032,6 +3154,7 @@ async function refreshNodeDocker() {
           ip: n.ip,
           sshUser: n.sshUser,
           sshPort: Number(n.sshPort) || 22,
+          sshPassword: n.sshPassword || undefined,
         })),
         sshPassword: sshCreds.password || undefined,
         sshKeyPath: sshCreds.keyPath || undefined,
@@ -3057,7 +3180,7 @@ const refreshNodeDockerSoon = debounce(() => {
   const onWizard = view.value === 'wizard'
   const onMachines =
     onWizard && wizardStep.value === 0 && siteSubSteps.value[siteSubStep.value]?.key === 'machines'
-  const onDocker = onWizard && !isLocalDocker.value && wizardStep.value === 1
+  const onDocker = onWizard && wizardStep.value === 1
   if (onMachines || onDocker) refreshNodeDocker()
 }, 800)
 
@@ -3115,7 +3238,7 @@ async function loadFirewallStatus() {
       method: 'POST',
       body: JSON.stringify({
         node: (n?.name || n?.ip || '').trim(),
-        sshPassword: sshCreds.password || undefined,
+        sshPassword: n?.sshPassword || sshCreds.password || undefined,
         sshKeyPath: sshCreds.keyPath || undefined,
       }),
     })
@@ -3189,7 +3312,7 @@ async function runDeploy(dryRun) {
         package: form.package,
         dryRun,
         operator: settings.operator,
-        scenario: settings.scenario,
+        scenario: 'linux',
       }),
     })
     const done = await watchJob(job.id)
@@ -3259,7 +3382,7 @@ function applyStatusPayload(data) {
 }
 
 function svcSearchText(s) {
-  return formatSvcSearchText(s, settings.privacyMode)
+  return formatSvcSearchText(s)
 }
 
 const filteredServices = computed(() => {
@@ -3297,7 +3420,7 @@ async function runStatusAction(action, s) {
         name,
         composeDir: svcComposeDir(s) || undefined,
         nodeIP: svcNodeIP(s) || undefined,
-        sshPassword: sshCreds.password || undefined,
+        sshPassword: sshPasswordForIP(svcNodeIP(s)) || undefined,
         sshKeyPath: sshCreds.keyPath || undefined,
       }),
     })
@@ -3352,31 +3475,6 @@ function openReport(id) {
 
 function exportDeliveries() {
   window.location = apiPath('/api/deliveries/export')
-}
-
-async function downloadDiag() {
-  busy.value = true
-  try {
-    const res = await fetch(apiPath('/api/diag'))
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}))
-      throw new Error(data.error || res.statusText)
-    }
-    const blob = await res.blob()
-    const cd = res.headers.get('Content-Disposition') || ''
-    const match = /filename=([^;]+)/i.exec(cd)
-    const name = match ? match[1].trim().replace(/"/g, '') : 'wpgctl-diag.tar.gz'
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = name
-    a.click()
-    URL.revokeObjectURL(url)
-  } catch (e) {
-    notify('诊断包下载失败: ' + e.message, 'warn')
-  } finally {
-    busy.value = false
-  }
 }
 
 async function openUpgrade() {
@@ -3441,21 +3539,16 @@ async function fillHostsAuto() {
     if (!addrs.includes(loopback)) addrs.unshift(loopback)
     if (preferred && !addrs.includes(preferred)) addrs.unshift(preferred)
 
-    // 本机 Docker 默认 127.0.0.1；现场交付用探测到的网卡 IP
-    const pick = isLocalDocker.value ? loopback : preferred
+    const pick = preferred
     hostCandidates.value = addrs
     selectedHost.value = pick
     applyHostToForm(pick)
 
     const hostHint = info.hostname ? `（${info.hostname}）` : ''
-    if (isLocalDocker.value) {
-      hostFillMsg.value = `已填入 ${pick}${hostHint}；如需局域网 IP 可在下拉框切换`
-    } else {
-      const sync = siteForm.middleware.mysql.disabled
-        ? 'Nacos/PgSQL/Redis/Kafka Host'
-        : 'Nacos/MySQL/PgSQL/Redis/Kafka Host'
-      hostFillMsg.value = `已填入 ${pick}${hostHint}；已同步到 ${sync}`
-    }
+    const sync = siteForm.middleware.mysql.disabled
+      ? 'Nacos/PgSQL/Redis/Kafka Host'
+      : 'Nacos/MySQL/PgSQL/Redis/Kafka Host'
+    hostFillMsg.value = `已填入 ${pick}${hostHint}；已同步到 ${sync}`
   } catch (e) {
     hostFillMsg.value = '获取失败: ' + e.message
   }
@@ -3590,7 +3683,7 @@ function startLogs() {
   logWs.onopen = () => {
     if (node) {
       logWs.send(JSON.stringify({
-        sshPassword: sshCreds.password || '',
+        sshPassword: sshPasswordForIP(node) || '',
         sshKeyPath: sshCreds.keyPath || '',
       }))
     }
@@ -3781,7 +3874,6 @@ function applyHashToState() {
   if (
     parsed.view === 'wizard' &&
     !siteFileExists.value &&
-    !isLocalDocker.value &&
     parsed.wizardStep != null &&
     parsed.wizardStep > 0
   ) {
@@ -4019,6 +4111,9 @@ async function mount() {
   }
   await loadSettings()
   await loadSite()
+  loadPackages()
+  loadLatest()
+  loadHistory()
   const draft = loadDraft()
   if (draft) {
     applyDraft(draft, {
@@ -4102,7 +4197,6 @@ return {
   moduleDefs,
   selectedModules,
   passwordVisible,
-  localStepDefs,
   fieldStepDefs,
   fieldStepDone,
   verifyReport,
@@ -4213,10 +4307,12 @@ return {
   siteCode,
   siteLoaded,
   reportUrl,
-  isLocalDocker,
-  nginxHtmlPath,
   nginxWebConfPath,
   heroLead,
+  siteNodeCount,
+  lastActionText,
+  homeTipVisible,
+  dismissHomeTip,
   modeHint,
   platformHint,
   envChipText,
@@ -4241,8 +4337,6 @@ return {
   loadSettings,
   scheduleFieldPathsSave,
   saveSettings,
-  setScenario,
-  onLocalDockerToggle,
   loadPackages,
   loadLatest,
   askConfirm,
@@ -4295,7 +4389,6 @@ return {
   onFsDblClick,
   isHintEnter,
   isHintMark,
-  pickerHintType,
   goWizard,
   nextFromSite,
   joinPath,
@@ -4307,7 +4400,9 @@ return {
   loadTextFile,
   saveTextFile,
   openEnvEditor,
+  openComposeEditor,
   openStandaloneEnvEditor,
+  openStandaloneComposeEditor,
   isEditableConfigFile,
   closeFileEditor,
   switchFileCandidate,
@@ -4319,6 +4414,15 @@ return {
   runApplySQL,
   runAllMiddlewareDeploy,
   runAllBusinessDeploy,
+  runMonitorDeploy,
+  monitorLayout,
+  refreshMonitorLayout,
+  openMonitorFile,
+  expandMonitorServices,
+  patchMonitorFiles,
+  toggleMonitorAgent,
+  toggleMonitorExporter,
+  defaultMonitorExporters,
   runStandaloneDeploy,
   runAllStandaloneDeploy,
   expandPlatformArchives,
@@ -4373,7 +4477,6 @@ return {
   openFetch,
   openReport,
   exportDeliveries,
-  downloadDiag,
   openUpgrade,
   runFetch,
   applyHostToForm,

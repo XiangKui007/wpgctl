@@ -1,4 +1,4 @@
-﻿<script>
+<script>
 /** 现场向导 ③：数据库 compose 部署，可选执行本机 .sql。 */
 import { useConsole } from '@/composables/useConsole.js'
 
@@ -38,7 +38,7 @@ export default {
               <div>
                 <strong>{{ m.label }}</strong>
                 <span class="muted"> — {{ moduleDir('database', m.name) }}</span>
-                <span v-if="!isLocalDocker && isMultiNode" class="node-target">@ {{ moduleTargetLabel(m.name, 'database') }}</span>
+                <span v-if="isMultiNode" class="node-target">@ {{ moduleTargetLabel(m.name, 'database') }}</span>
                 <span v-if="fieldModuleStatus[m.name]" class="badge green" style="margin-left:0.5rem">{{ fieldModuleStatus[m.name] }}</span>
               </div>
               <el-button

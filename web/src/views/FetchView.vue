@@ -1,4 +1,4 @@
-﻿<script>
+<script>
 /** 包中心：扫描 manifest、本地包列表、拉包/导入。 */
 import { useConsole } from '@/composables/useConsole.js'
 import YamlEditor from '@/components/YamlEditor.vue'
@@ -58,7 +58,7 @@ export default {
                 <td>{{ img.name }}</td>
                 <td>L{{ img.layer }}</td>
                 <td>{{ img.image }}</td>
-                <td class="muted">{{ settings.privacyMode ? '******' : img.tarPath }}</td>
+                <td class="muted">{{ img.tarPath }}</td>
               </tr>
             </tbody>
           </table>
@@ -86,7 +86,7 @@ export default {
             <template #default="{ row }">{{ row.version || '—' }}</template>
           </el-table-column>
           <el-table-column label="路径" min-width="220">
-            <template #default="{ row }">{{ settings.privacyMode ? '******' : row.path }}</template>
+            <template #default="{ row }">{{ row.path }}</template>
           </el-table-column>
           <el-table-column label="" width="120">
             <template #default="{ row }">
@@ -125,7 +125,7 @@ export default {
         </div>
         <JobLogBox :lines="jobLogs" :running="!!activeJobKey" />
         <p v-if="fetchResultDir" class="muted" style="color:var(--ok);margin-top:1rem">
-          包已就绪：{{ settings.privacyMode ? '******' : fetchResultDir }}
+          包已就绪：{{ fetchResultDir }}
           <el-button type="success" plain size="small" style="margin-left:0.5rem" @click="useFetchedPackage">用于部署向导</el-button>
         </p>
       </div>

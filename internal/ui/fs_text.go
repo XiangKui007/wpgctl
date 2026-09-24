@@ -24,7 +24,7 @@ func (s *Server) handleFSText(w http.ResponseWriter, r *http.Request) {
 		s.writeJSON(w, 400, map[string]string{"error": err.Error()})
 		return
 	}
-	find := r.URL.Query().Get("find") == "1" || isDotEnvPath(abs) || isNginxWebConfName(abs)
+	find := r.URL.Query().Get("find") == "1" || isDotEnvPath(abs) || isComposeFileName(abs) || isNginxWebConfName(abs)
 
 	switch r.Method {
 	case http.MethodGet:
@@ -82,6 +82,9 @@ func (s *Server) getFSText(w http.ResponseWriter, abs string, find bool) {
 				return
 			}
 		}
+	} else if isComposeFileName(abs) {
+		found = findComposeFiles(searchRoot)
+		found = preferFilesMatchingHint(found, abs)
 	} else if isNginxWebConfName(abs) {
 		if p := moduledeploy.FindNginxWebConf(searchRoot); util.FileExists(p) {
 			found = []string{p}
@@ -111,7 +114,8 @@ func (s *Server) writeFSTextOK(w http.ResponseWriter, requested, target string, 
 	if len(candidates) > 1 {
 		out["candidates"] = candidates
 		out["hint"] = fmt.Sprintf("找到 %d 个同名文件，当前打开：%s", len(candidates), target)
-	} else if filepath.Clean(target) != filepath.Clean(requested) {
+	} else if filepath.Clean(target) != filepath.Clean(requested) && !sameComposeFile(requested, target) {
+		// 按钮固定请求 docker-compose.yaml，现场文件常是 .yml，同一目录打开成功不算找不到。
 		out["hint"] = "请求路径没有该文件，已打开实际位置: " + target
 	}
 	s.writeJSON(w, 200, out)
@@ -121,6 +125,8 @@ func (s *Server) writeMissingDraft(w http.ResponseWriter, abs string) {
 	hint := "文件尚不存在，保存后会新建"
 	if isDotEnvPath(abs) {
 		hint = "目录里还没有 .env（可能还在 tar.zip 里）。保存将新建该文件；也可先「批量解压」后再编辑。"
+	} else if isComposeFileName(abs) {
+		hint = "目录里还没有 docker-compose.yml / docker-compose.yaml（可能还在 tar.zip 里）。保存将新建该文件；也可先解压后再编辑。"
 	} else if isNginxWebConfName(abs) {
 		hint = "未找到 http-web-8877.conf。常见位置：nginx/conf/conf.d/；多层 middleware 时在 …/middleware/middleware/nginx/conf/conf.d/。"
 	}
@@ -196,6 +202,68 @@ func (s *Server) putFSText(w http.ResponseWriter, r *http.Request, abs string) {
 
 func isDotEnvPath(path string) bool {
 	return strings.EqualFold(filepath.Base(path), ".env")
+}
+
+// sameComposeFile 同一目录下的 yml / yaml 视为同一个 compose，避免打开成功还提示「没有该文件」。
+func sameComposeFile(requested, target string) bool {
+	if !isComposeFileName(requested) || !isComposeFileName(target) {
+		return false
+	}
+	return filepath.Clean(filepath.Dir(requested)) == filepath.Clean(filepath.Dir(target))
+}
+
+// isComposeFileName 请求的是 compose 文件（yml / yaml 都算）。
+func isComposeFileName(path string) bool {
+	switch strings.ToLower(filepath.Base(path)) {
+	case "docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml":
+		return true
+	default:
+		return false
+	}
+}
+
+// findComposeFiles 在模块目录下找 compose。较浅的优先；同一层优先 docker-compose.yml。
+func findComposeFiles(root string) []string {
+	var found []string
+	seen := map[string]bool{}
+	for _, name := range []string{"docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"} {
+		for _, p := range findNamedFiles(root, name, 4) {
+			if seen[p] {
+				continue
+			}
+			seen[p] = true
+			found = append(found, p)
+		}
+	}
+	sort.SliceStable(found, func(i, j int) bool {
+		di, dj := composeDepth(root, found[i]), composeDepth(root, found[j])
+		if di != dj {
+			return di < dj
+		}
+		return composeNameRank(found[i]) < composeNameRank(found[j])
+	})
+	return found
+}
+
+func composeDepth(root, path string) int {
+	rel, err := filepath.Rel(root, path)
+	if err != nil || rel == "." {
+		return 0
+	}
+	return len(strings.Split(rel, string(os.PathSeparator)))
+}
+
+func composeNameRank(path string) int {
+	switch strings.ToLower(filepath.Base(path)) {
+	case "docker-compose.yml":
+		return 0
+	case "docker-compose.yaml":
+		return 1
+	case "compose.yml":
+		return 2
+	default:
+		return 3
+	}
 }
 
 var skipEnvWalkDirs = map[string]bool{

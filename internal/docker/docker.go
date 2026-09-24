@@ -384,7 +384,7 @@ type ComposeService struct {
 	ExitCode   *int   `json:"ExitCode,omitempty"`   // 非运行中才带退出码，避免 running 也显示 0
 	Node       string `json:"Node,omitempty"`       // 节点名（多机状态页）
 	NodeIP     string `json:"NodeIP,omitempty"`     // 节点 IP，启停时用来走 SSH
-	Local      bool   `json:"Local,omitempty"`      // true 表示本机 Docker
+	Local      bool   `json:"Local,omitempty"`      // true 表示本机
 }
 
 // composePsJSON 兼容 docker compose ps --format json：Created 可能是 unix 秒，Ports 可能只在 Publishers 里。

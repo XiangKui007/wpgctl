@@ -1,7 +1,7 @@
-﻿<script>
+<script>
 /**
  * 本机路径选择器：目录、YAML、nacos*.zip、.sql 多选。
- * 选目录时同时展示文件夹下的文件，并按目标给出「可以选这一层 / 再进一层 / 选深了」。
+ * 选目录时同时展示文件夹下的文件，并用一行短提示说明当前能不能选。
  * 解压走「解压当前目录」或条目上的「解压此包」，并显示进度。
  */
 import { nextTick, ref, watch } from 'vue'
@@ -69,19 +69,14 @@ export default {
           @click="picker.mode === 'sql' ? confirmSqlPicker() : confirmNacosZipPicker()"
         >确认已选 {{ picker.selected.length }} 个</el-button>
       </div>
-      <el-alert
-        v-if="picker.mode === 'dir' && picker.hint && picker.hint.message"
+      <p
+        v-if="picker.mode === 'dir' && picker.hint && picker.hint.headline"
         class="picker-level-hint"
-        :type="pickerHintType(picker.hint.level)"
-        :closable="false"
-        :title="picker.hint.headline || '怎么判断选对了'"
-        :description="picker.hint.message"
-        show-icon
-      />
-      <p v-if="picker.mode === 'dir'" class="muted" style="font-size:0.85rem">
-        点文件夹进入。橙色「进这一层」还要再点进去；青绿「到层标志」说明已经到了。
+        :data-level="picker.hint.level"
+      >
+        {{ picker.hint.headline }}<template v-if="picker.hint.level !== 'ready' && picker.hint.message"> · {{ picker.hint.message }}</template>
       </p>
-      <p v-else-if="picker.mode === 'nacos-zip'" class="muted" style="font-size:0.85rem">
+      <p v-if="picker.mode === 'nacos-zip'" class="muted" style="font-size:0.85rem">
         勾选 nacos*.zip，导入时不解压。
       </p>
       <p v-else-if="picker.mode === 'sql'" class="muted" style="font-size:0.85rem">
@@ -110,7 +105,7 @@ export default {
             :stroke-width="10"
             striped
             :striped-flow="picker.expanding"
-            color="#1ad4be"
+            color="#12b5a2"
           />
         </template>
         <p v-if="picker.expandDetail" class="picker-expand-detail">{{ picker.expandDetail }}</p>
@@ -136,8 +131,12 @@ export default {
           <el-icon class="fs-icon"><Folder v-if="e.isDir" /><Files v-else-if="e.isArchive" /><Document v-else /></el-icon>
           <span class="fs-name">{{ e.name }}</span>
           <span v-if="e.isArchive" class="fs-kind">{{ e.alreadyExpanded ? '已展开' : (e.archiveKind || 'zip') }}</span>
-          <span v-else-if="isHintEnter(e)" class="fs-kind enter">进这一层</span>
-          <span v-else-if="isHintMark(e)" class="fs-kind mark">到层标志</span>
+          <span v-else-if="isHintEnter(e)" class="fs-mark-icon enter" title="再进这一层">
+            <el-icon><ArrowRight /></el-icon>
+          </span>
+          <span v-else-if="isHintMark(e)" class="fs-mark-icon" title="这一层的标志">
+            <el-icon><CircleCheck /></el-icon>
+          </span>
           <span v-else-if="picker.mode === 'dir' && !e.isDir" class="fs-kind">文件</span>
           <el-button
             v-if="picker.mode === 'dir' && canExpandArchive(e)"

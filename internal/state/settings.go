@@ -10,12 +10,12 @@ import (
 	"github.com/wpg/wpgctl/internal/util"
 )
 
-// UISettings 控制台偏好（实施/专家模式、操作者、投屏等）。
+// UISettings 控制台偏好（操作者、一键部署、现场路径等）。
 type UISettings struct {
 	Mode        string `json:"mode"`        // implementer | expert
 	Operator    string `json:"operator"`    // 操作者署名
-	PrivacyMode bool   `json:"privacyMode"` // 投屏模式：隐藏敏感
-	Scenario    string `json:"scenario"`    // windows=本机Docker | linux=现场交付（默认）
+	PrivacyMode bool   `json:"privacyMode"` // 已废弃：旧 settings.json 仍可能带此字段，读写一律当成关
+	Scenario    string `json:"scenario"`    // 仅保留 linux；旧 settings 里的 windows 读入时改成 linux
 	// AdvancedMode 显示一键式部署入口（包中心 / 升级 / 交付单 / 验收报告）。
 	AdvancedMode bool `json:"advancedMode"`
 	// FieldPaths 现场向导中不属于 site.yaml 的本机路径（middleware/platform 根目录、Docker 离线包、
@@ -77,9 +77,8 @@ func LoadSettings() (*UISettings, error) {
 	if s.Operator == "" {
 		s.Operator = "operator"
 	}
-	if s.Scenario != "windows" {
-		s.Scenario = "linux"
-	}
+	s.Scenario = "linux"
+	s.PrivacyMode = false
 	return &s, nil
 }
 

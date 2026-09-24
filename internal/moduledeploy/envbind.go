@@ -32,9 +32,9 @@ type envBinder struct {
 // envBinders 按节点规划填充的可选中间件。顺序即匹配优先级（先写更具体的）。
 var envBinders = []envBinder{
 	{
-		// 容器内仍是 9000；compose 映射 9500:9000，业务从宿主机连的是 9500。
+		// 只改地址。端口留在 .env 里，不按 compose 映射改写。
 		Service:  "minio",
-		Port:     9500,
+		Port:     0,
 		Fallback: "nacos",
 		Match:    []string{"MINIO"},
 		HostKeys: []string{"MINIO_HOST", "MINIO_IP", "MINIO_HOSTNAME", "MINIO_ADDR"},

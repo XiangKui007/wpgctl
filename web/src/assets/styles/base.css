@@ -68,7 +68,7 @@ select {
   font: inherit;
 }
 
-button:disabled {
+button:disabled:not(.el-button) {
   opacity: 0.4;
   cursor: not-allowed;
 }
@@ -76,7 +76,28 @@ button:disabled {
 .app-shell {
   min-height: 100vh;
   display: grid;
-  grid-template-rows: auto 1fr;
+  grid-template-rows: auto 1fr auto;
+}
+
+.app-main {
+  min-width: 0;
+}
+
+.app-footer {
+  color: var(--ink-soft);
+  border-top: 1px solid var(--line);
+}
+
+.app-footer-inner {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.4rem 1.5rem;
+  max-width: var(--page);
+  width: 100%;
+  margin: 0 auto;
+  padding: 1rem 1.5rem 1.15rem;
+  font-size: 0.82rem;
 }
 
 /* 顶部细进度条：任何 busy 都亮，替代全屏遮罩，不挡日志与滚动。 */

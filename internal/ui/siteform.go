@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/wpg/wpgctl/internal/config"
 	"gopkg.in/yaml.v3"
@@ -35,6 +36,19 @@ func (s *Server) handleSiteForm(w http.ResponseWriter, r *http.Request) {
 		if body.Middleware.PgSQL.Password == "" {
 			body.Middleware.PgSQL.Password = existing.Middleware.PgSQL.Password
 		}
+		for i := range body.Nodes {
+			if strings.TrimSpace(body.Nodes[i].SSH.Password) != "" {
+				continue
+			}
+			for _, old := range existing.Nodes {
+				same := body.Nodes[i].Name != "" && body.Nodes[i].Name == old.Name
+				same = same || (body.Nodes[i].IP != "" && body.Nodes[i].IP == old.IP)
+				if same && old.SSH.Password != "" {
+					body.Nodes[i].SSH.Password = old.SSH.Password
+					break
+				}
+			}
+		}
 	}
 	// 默认 SSH 端口
 	for i := range body.Nodes {
@@ -45,6 +59,8 @@ func (s *Server) handleSiteForm(w http.ResponseWriter, r *http.Request) {
 			body.Nodes[i].SSH.User = "root"
 		}
 	}
+	// 向导不再单独配置前端目录，Nginx 步骤用模块目录下的 html。保存时丢掉旧的 nginxHtml。
+	body.Paths.NginxHTML = ""
 	body.Normalize()
 	if err := body.Validate(); err != nil {
 		s.writeJSON(w, 400, map[string]string{"error": err.Error()})

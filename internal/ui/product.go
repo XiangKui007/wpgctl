@@ -1,4 +1,4 @@
-// Package ui 产品化 API：设置、包中心、验收报告、diag 下载、确认摘要。
+// Package ui 产品化 API：设置、包中心、验收报告、确认摘要。
 package ui
 
 import (
@@ -13,7 +13,6 @@ import (
 	"github.com/wpg/wpgctl/internal/config"
 	"github.com/wpg/wpgctl/internal/pack"
 	"github.com/wpg/wpgctl/internal/state"
-	"github.com/wpg/wpgctl/internal/status"
 	"github.com/wpg/wpgctl/internal/util"
 )
 
@@ -39,9 +38,8 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		if body.Mode != "implementer" && body.Mode != "expert" {
 			body.Mode = "implementer"
 		}
-		if body.Scenario != "windows" {
-			body.Scenario = "linux"
-		}
+		body.Scenario = "linux"
+		body.PrivacyMode = false
 		if prev, err := state.LoadSettings(); err == nil && prev != nil {
 			if body.FieldPaths == nil {
 				// 未携带 fieldPaths 的旧调用：保留已持久化的路径
@@ -438,38 +436,6 @@ th,td{border-bottom:1px solid #ddd;padding:.6rem;text-align:left;font-size:.95re
 		strings.Join(rec.Profiles, ", "), rec.ServiceCount, rec.Message,
 		rows.String(), time.Now().Format(time.RFC3339),
 	)
-}
-
-func (s *Server) handleDiagDownload(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost && r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", 405)
-		return
-	}
-	site, _ := config.LoadSite(s.opts.SitePath)
-	composeDir := ""
-	renderDir := ""
-	if site != nil {
-		composeDir = filepath.Join(site.Paths.Workspace, "rendered")
-		renderDir = composeDir
-	}
-	outName := fmt.Sprintf("wpgctl-diag-%s.tar.gz", time.Now().Format("20060102150405"))
-	outPath := filepath.Join(os.TempDir(), outName)
-	path, err := status.CollectDiag(status.DiagOptions{
-		Site: site, ComposeDir: composeDir, RenderDir: renderDir, Output: outPath,
-	})
-	if err != nil {
-		s.writeJSON(w, 500, map[string]string{"error": err.Error()})
-		return
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		s.writeJSON(w, 500, map[string]string{"error": err.Error()})
-		return
-	}
-	w.Header().Set("Content-Type", "application/gzip")
-	w.Header().Set("Content-Disposition", "attachment; filename="+outName)
-	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(data)))
-	_, _ = w.Write(data)
 }
 
 func (s *Server) handleDeliveryExport(w http.ResponseWriter, r *http.Request) {

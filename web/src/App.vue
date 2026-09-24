@@ -1,9 +1,12 @@
 <template>
-  <div class="app-shell" :class="isLocalDocker ? 'mode-local' : 'mode-field'">
+  <div class="app-shell mode-field">
     <!-- 任务期间不再全屏遮罩：顶部细进度条 + 顶栏标签，日志框留给现场看。 -->
     <div v-if="busy" class="app-progress" role="progressbar" aria-busy="true" />
     <AppHeader />
-    <router-view />
+    <main class="app-main">
+      <router-view />
+    </main>
+    <AppFooter />
     <PathPickerDialog />
     <FileEditorDialog />
   </div>
@@ -20,18 +23,19 @@
  * - constants/catalog.js          服务目录、步骤定义、默认账号
  * - utils/                        格式化、状态卡片字段、本地草稿
  * - views/ 与 views/wizard/       页面模板，通过 useConsole() 取状态
- * - components/                   顶栏、路径选择器、文件编辑器等可复用组件
+ * - components/                   顶栏、页脚、路径选择器、文件编辑器等可复用组件
  */
 import { onMounted, onUnmounted, provide } from 'vue'
 import { WPGCTL_KEY } from '@/composables/key.js'
 import { createConsole } from '@/composables/createConsole.js'
 import AppHeader from '@/components/AppHeader.vue'
+import AppFooter from '@/components/AppFooter.vue'
 import PathPickerDialog from '@/components/PathPickerDialog.vue'
 import FileEditorDialog from '@/components/FileEditorDialog.vue'
 
 const ctx = createConsole()
 provide(WPGCTL_KEY, ctx)
-const { isLocalDocker, busy } = ctx
+const { busy } = ctx
 
 onMounted(() => ctx.mount())
 onUnmounted(() => ctx.unmount())

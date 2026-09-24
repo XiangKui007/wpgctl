@@ -124,7 +124,6 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/packages/scan", s.handlePackageScan)
 	s.mux.HandleFunc("/api/confirm-summary", s.handleConfirmSummary)
 	s.mux.HandleFunc("/api/report", s.handleReport)
-	s.mux.HandleFunc("/api/diag", s.handleDiagDownload)
 	s.mux.HandleFunc("/api/deliveries/export", s.handleDeliveryExport)
 	s.mux.HandleFunc("/api/precheck", s.handlePrecheck)
 	s.mux.HandleFunc("/api/init", s.handleInit)
@@ -133,6 +132,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/module/catalog", s.handleModuleCatalog)
 	s.mux.HandleFunc("/api/module/path", s.handleModulePath)
 	s.mux.HandleFunc("/api/module/deploy", s.handleModuleDeploy)
+	s.mux.HandleFunc("/api/module/monitor", s.handleMonitorDeploy)
+	s.mux.HandleFunc("/api/module/monitor/layout", s.handleMonitorLayout)
+	s.mux.HandleFunc("/api/module/monitor/patch", s.handleMonitorPatch)
+	s.mux.HandleFunc("/api/module/monitor/expand", s.handleMonitorExpand)
 	s.mux.HandleFunc("/api/module/patch-env", s.handleModulePatchEnv)
 	s.mux.HandleFunc("/api/nginx/patch", s.handleNginxPatch)
 	s.mux.HandleFunc("/api/nginx/status", s.handleNginxStatus)
@@ -225,7 +228,6 @@ middleware:
   kafka: { host: 127.0.0.1, port: 9092 }
 paths:
   workspace: /workspace
-  nginxHtml: /workspace/middleware/nginx/html
 `
 		s.writeJSON(w, 200, map[string]any{
 			"path":    s.opts.SitePath,
@@ -241,11 +243,7 @@ paths:
 	var parsed any
 	if err == nil {
 		safe := *cfg
-		// 编辑用 raw yaml（含真实密码）；parsed 仅作摘要，密码脱敏
-		safe.Middleware.Nacos.Password = mask(safe.Middleware.Nacos.Password)
-		safe.Middleware.MySQL.Password = mask(safe.Middleware.MySQL.Password)
-		safe.Middleware.Redis.Password = mask(safe.Middleware.Redis.Password)
-		safe.Middleware.PgSQL.Password = mask(safe.Middleware.PgSQL.Password)
+		// parsed 回填凭证表单，密码保持原文；投屏脱敏已去掉。
 		parsed = safe
 	}
 	s.writeJSON(w, 200, map[string]any{
@@ -322,13 +320,6 @@ func errString(err error) string {
 		return ""
 	}
 	return err.Error()
-}
-
-func mask(s string) string {
-	if s == "" {
-		return ""
-	}
-	return "******"
 }
 
 func (s *Server) handlePrecheck(w http.ResponseWriter, r *http.Request) {

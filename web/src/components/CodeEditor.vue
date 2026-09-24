@@ -37,7 +37,7 @@ function buildTheme() {
       lineHeight: '1.55',
     },
     '.cm-content': {
-      caretColor: '#0f766e',
+      caretColor: '#0a7a6e',
       padding: '8px 0',
     },
     '.cm-gutters': {
@@ -46,7 +46,7 @@ function buildTheme() {
       borderRight: '1px solid rgba(21, 36, 40, 0.06)',
     },
     '.cm-activeLine': {
-      backgroundColor: 'rgba(20, 184, 166, 0.06)',
+      backgroundColor: 'rgba(18, 181, 162, 0.08)',
     },
     '.cm-activeLineGutter': {
       backgroundColor: 'rgba(20, 184, 166, 0.1)',

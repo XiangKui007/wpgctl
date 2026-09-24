@@ -30,6 +30,9 @@ type Session struct {
 
 // Open 连接节点并返回会话；Log 为空时静默。
 func Open(node config.Node, password, privateKey string, log func(string)) (*Session, error) {
+	if p := strings.TrimSpace(node.SSH.Password); p != "" {
+		password = p
+	}
 	cli, err := DialNode(node, password, privateKey)
 	if err != nil {
 		return nil, err

@@ -32,10 +32,11 @@ func (s *Server) handleDockerNodes(w http.ResponseWriter, r *http.Request) {
 	}
 	var body struct {
 		Nodes []struct {
-			Name    string `json:"name"`
-			IP      string `json:"ip"`
-			SSHUser string `json:"sshUser"`
-			SSHPort int    `json:"sshPort"`
+			Name        string `json:"name"`
+			IP          string `json:"ip"`
+			SSHUser     string `json:"sshUser"`
+			SSHPort     int    `json:"sshPort"`
+			SSHPassword string `json:"sshPassword"`
 		} `json:"nodes"`
 		SSHPassword string `json:"sshPassword"`
 		SSHKeyPath  string `json:"sshKeyPath"`
@@ -59,7 +60,7 @@ func (s *Server) handleDockerNodes(w http.ResponseWriter, r *http.Request) {
 		nodes = append(nodes, config.Node{
 			Name: strings.TrimSpace(n.Name),
 			IP:   strings.TrimSpace(n.IP),
-			SSH:  config.SSHAuth{User: user, Port: port},
+			SSH:  config.SSHAuth{User: user, Port: port, Password: strings.TrimSpace(n.SSHPassword)},
 		})
 	}
 	if len(nodes) == 0 {
@@ -110,16 +111,16 @@ func probeLocalDocker(st NodeDockerStatus) NodeDockerStatus {
 		return st
 	}
 	if !dr.Available() {
-		st.Message = "本机 Docker 未启动"
+		st.Message = "Docker 未启动"
 		return st
 	}
 	ver, _ := dr.Version()
 	st.OK = true
 	st.Version = ver
 	if ver != "" {
-		st.Message = "本机 Docker 已启动 " + ver
+		st.Message = "Docker 已启动 " + ver
 	} else {
-		st.Message = "本机 Docker 已启动"
+		st.Message = "Docker 已启动"
 	}
 	return st
 }
